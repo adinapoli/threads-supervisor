@@ -27,7 +27,7 @@ install:
  - cabal install --only-dependencies --enable-tests
 
 script:
- - cabal configure --enable-tests -v2 --enable-library-coverage
+ - cabal configure --enable-tests -v2
  - cabal build
  - cabal test --show-details=always
  - cabal check
@@ -42,8 +42,3 @@ script:
       echo "expected '$SRC_TGZ' not found";
       exit 1;
    fi
-
-after_script:
- - cabal install hpc-coveralls
- - export PATH=/opt/ghc/$GHCVER/bin:$HOME/.cabal/bin:$PATH
- - hpc-coveralls --coverage-mode=StrictlyFullLines mandrill-tests
