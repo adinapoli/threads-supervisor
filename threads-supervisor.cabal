@@ -18,7 +18,6 @@ source-repository head
 library
   exposed-modules:
     Control.Concurrent.Supervisor
-  other-modules:
     Control.Concurrent.Supervisor.Tutorial
   build-depends:
     base                 >= 4.6 && < 5,
