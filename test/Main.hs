@@ -2,12 +2,9 @@
 module Main where
 
 import           Test.Tasty
-import           Test.Tasty.Runners
-import           Test.Tasty.HUnit
 import           Test.Tasty.QuickCheck
 import           Test.QuickCheck.Monadic
 import           Tests
-import           Control.Concurrent
 
 
 --------------------------------------------------------------------------------
