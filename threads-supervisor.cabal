@@ -15,9 +15,6 @@ source-repository head
   type: git
   location: https://github.com/adinapoli/threads-supervisor
 
-flag hpc
-  default: False
-
 library
   exposed-modules:
     Control.Concurrent.Supervisor
@@ -28,8 +25,6 @@ library
     unordered-containers >= 0.2.0.0 && < 0.3.0.0,
     stm                  >= 2.4,
     time                 >= 1.2
-  if flag(hpc)
-    ghc-options: -fhpc
   hs-source-dirs:
     src
   default-language:    Haskell2010
