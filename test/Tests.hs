@@ -15,7 +15,6 @@ import           Control.Concurrent
 import           Control.Concurrent.STM
 import           Control.Exception
 import           Control.Concurrent.Supervisor
-import           Data.Time
 
 --------------------------------------------------------------------------------
 type IOProperty = PropertyM IO
@@ -121,8 +120,8 @@ assertContainsRestartMsg (x:xs) tid = case x of
 -- Control.Concurrent.Supervisor tests
 test1SupThreadNoEx :: IOProperty ()
 test1SupThreadNoEx = forAllM randomLiveTime $ \ttl -> do
-  supSpec <- lift newSupervisor
-  sup <- lift $ supervise supSpec
+  supSpec <- lift newSupervisorSpec
+  sup <- lift $ newSupervisor supSpec
   _ <- lift (forkSupervised sup OneForOne (forever $ threadDelay ttl))
   assertActiveThreads sup (== 1)
   lift $ shutdownSupervisor sup
@@ -130,8 +129,8 @@ test1SupThreadNoEx = forAllM randomLiveTime $ \ttl -> do
 --------------------------------------------------------------------------------
 test1SupThreadPrematureDemise :: IOProperty ()
 test1SupThreadPrematureDemise = forAllM randomLiveTime $ \ttl -> do
-  supSpec <- lift newSupervisor
-  sup <- lift $ supervise supSpec
+  supSpec <- lift newSupervisorSpec
+  sup <- lift $ newSupervisor supSpec
   tid <- lift (forkSupervised sup OneForOne (forever $ threadDelay ttl))
   lift $ do
     throwTo tid (AssertionFailed "You must die")
@@ -165,8 +164,8 @@ maxWait ta = go ta []
 -- the side effects strikes.
 testKillingSpree :: IOProperty ()
 testKillingSpree = forAllM arbitrary $ \ep@(ExecutionPlan _ acts) -> do
-  supSpec <- lift newSupervisor
-  sup <- lift $ supervise supSpec
+  supSpec <- lift newSupervisorSpec
+  sup <- lift $ newSupervisor supSpec
   _ <- forM acts $ lift . fromAction sup
   lift (threadDelay $ maxWait acts * 2)
   q <- lift $ qToList (eventStream sup)
@@ -180,8 +179,8 @@ testKillingSpree = forAllM arbitrary $ \ep@(ExecutionPlan _ acts) -> do
 testSupCleanup :: IOProperty ()
 testSupCleanup = forAllM (vectorOf 100 arbitrary) $ \ttls -> do
   let acts = map DieAfter ttls
-  supSpec <- lift newSupervisor
-  sup <- lift $ supervise supSpec
+  supSpec <- lift newSupervisorSpec
+  sup <- lift $ newSupervisor supSpec
   _ <- forM acts $ lift . fromAction sup
   lift (threadDelay $ maxWait acts * 2)
   q <- lift $ qToList (eventStream sup)
