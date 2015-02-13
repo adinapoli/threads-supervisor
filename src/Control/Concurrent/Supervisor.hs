@@ -59,7 +59,8 @@ type Supervisor = Supervisor_ Initialised
 data DeadLetter = DeadLetter ThreadId SomeException
 
 --------------------------------------------------------------------------------
-data Child = Child !RestartStrategy RestartAction
+data Child = Worker !RestartStrategy RestartAction
+           | Supvsr !RestartStrategy !(Supervisor_ Initialised)
 
 --------------------------------------------------------------------------------
 type RestartAction = ThreadId -> IO ThreadId
@@ -73,7 +74,8 @@ data SupervisionEvent =
    deriving Show
 
 --------------------------------------------------------------------------------
--- | Erlang inspired strategies.
+-- | Erlang inspired strategies. At the moment only the 'OneForOne' is
+-- implemented.
 data RestartStrategy =
      OneForOne
      deriving Show
@@ -118,7 +120,7 @@ forkSupervised :: Supervisor
                -> IO ThreadId
 forkSupervised sup@Supervisor{..} str act =
   bracket (supervised sup act) return $ \newChild -> do
-    let ch = Child str (const (supervised sup act))
+    let ch = Worker str (const (supervised sup act))
     atomicModifyIORef' _sp_children $ \chMap -> (Map.insert newChild ch chMap, ())
     now <- getCurrentTime
     writeIfNotFull _sp_eventStream (ChildBorn newChild now)
@@ -142,26 +144,33 @@ supervised Supervisor{..} act = forkFinally act $ \res -> case res of
 
 --------------------------------------------------------------------------------
 supervise :: SupervisorSpec -> IO Supervisor
-supervise NewSupervisor{..} = forkIO go >>= \tid -> return $ Supervisor {
-  _sp_myTid = Just tid
-  , _sp_mailbox = _ns_mailbox
-  , _sp_children = _ns_children
-  , _sp_eventStream = _ns_eventStream
+supervise spec = forkIO (go spec) >>= \tid -> return $ Supervisor {
+    _sp_myTid = Just tid
+  , _sp_mailbox = _ns_mailbox spec
+  , _sp_children = _ns_children spec
+  , _sp_eventStream = _ns_eventStream spec
   }
   where
-   go = do
+   go :: SupervisorSpec -> IO ()
+   go sp@NewSupervisor{..} = do
      (DeadLetter newDeath ex) <- atomically $ readTQueue _ns_mailbox
      now <- getCurrentTime
      writeIfNotFull _ns_eventStream (ChildDied newDeath ex now)
      case asyncExceptionFromException ex of
-       Just ThreadKilled -> go
+       Just ThreadKilled -> go sp
        _ -> do
         chMap <- readIORef _ns_children
         case Map.lookup newDeath chMap of
-          Nothing -> go
-          Just ch@(Child str act) -> case str of
+          Nothing -> go sp
+          Just ch@(Worker str act) -> case str of
             OneForOne -> do
               newThreadId <- act newDeath
               writeIORef _ns_children (Map.insert newThreadId ch $! Map.delete newDeath chMap)
               writeIfNotFull _ns_eventStream (ChildRestarted newDeath newThreadId str now)
-              go
+              go sp
+          Just ch@(Supvsr str (Supervisor _ mbx cld es)) -> case str of
+            OneForOne -> do
+              newThreadId <- forkIO (go $ NewSupervisor Nothing mbx cld es)
+              writeIORef _ns_children (Map.insert newThreadId ch $! Map.delete newDeath chMap)
+              writeIfNotFull _ns_eventStream (ChildRestarted newDeath newThreadId str now)
+              go sp
