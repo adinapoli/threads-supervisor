@@ -1,5 +1,4 @@
-{-# LANGUAGE RecordWildCards #-}
-{-# LANGUAGE ScopedTypeVariables #-}
+{-# OPTIONS_GHC -fno-warn-unused-imports #-}
 
 {-| Use @threads-supervisor@ if you want the "poor-man's Erlang supervisors".
     @threads-supervisor@ is an IO-based library  with minimal dependencies
@@ -85,31 +84,77 @@ module Control.Concurrent.Supervisor.Tutorial
 --
 -- These jobs represent a significant pool of our everyday computations in the IO monad
 
-
 -- $createSpec
--- Here I discuss the creation of a 'SupervisorSpec'
+-- A 'SupervisorSpec' simply holds the state of our supervision, and can be safely shared
+-- between supervisors. Under the hood, both the `SupervisorSpec` and the `Supervisor`
+-- share the same structure; in fact, they are  just type synonyms:
+--
+-- > type SupervisorSpec = Supervisor_ Uninitialised
+-- > type Supervisor = Supervisor_ Initialised
+-- The important difference though, is that the `SupervisorSpec` does not imply the creation
+-- of an asynchronous thread, which the latter does. To keep separated the initialisation
+-- of the data structure from the logic of supervising, we use GADTs and type synonyms to
+-- force you create a spec first.
+-- Creating a spec it just a matter of calling `newSupervisorSpec`.
 
 -- $createSupervisor
--- Here I discuss the creation of a 'Supervisor' from a 'SupervisionSpec'
+-- Creating a 'Supervisor' from a 'SupervisionSpec', is as simple as calling `newSupervisor`.
+-- immediately after doing so, a new thread will be started, monitoring any subsequent IO actions
+-- submitted to it.
 
 -- $supervising
--- Here I discuss how you can supervise other threads.
-
--- $conclusions
--- I hope that you are now convinced that this library can be of some use to you!
+-- Let's wrap everything together into a full blown example:
 --
 -- > main :: IO ()
 -- > main = bracketOnError (do
--- >   supSpec <- newSupervisor
--- >   sup <- supervise supSpec
--- >   j1 <- forkSupervised sup OneForOne job1
--- >   _ <- forkSupervised sup OneForOne (job2 j1)
--- >   _ <- forkSupervised sup OneForOne job3
--- >   _ <- forkSupervised sup OneForOne job4
--- >   _ <- forkIO (go (eventStream sup))
--- >   return sup) shutdownSupervisor (\_ -> threadDelay 10000000000)
+-- >   supSpec <- newSupervisorSpec
+-- >
+-- >   sup1 <- newSupervisor supSpec
+-- >   sup2 <- newSupervisor supSpec
+-- >
+-- >   sup1 `monitor` sup2
+-- >
+-- >   _ <- forkSupervised sup2 OneForOne job3
+-- >
+-- >   j1 <- forkSupervised sup1 OneForOne job1
+-- >   _ <- forkSupervised sup1 OneForOne (job2 j1)
+-- >   _ <- forkSupervised sup1 OneForOne job4
+-- >   _ <- forkIO (go (eventStream sup1))
+-- >   return sup1) shutdownSupervisor (\_ -> threadDelay 10000000000)
 -- >   where
 -- >    go eS = do
 -- >      newE <- atomically $ readTBQueue eS
 -- >      print newE
 -- >      go eS
+--
+-- What we have done here, was to spawn our supervisor out from a spec,
+-- any using our swiss knife `forkSupervised` to spawn for supervised
+-- IO computations. As you can see, if we partially apply `forkSupervised`,
+-- its type resemble `forkIO` one; this is by design, as we want to keep
+-- this API as IO-friendly as possible
+-- in the very same example, we also create another supervisor
+-- (from the same spec, but you can create a separate one as well)
+-- and we ask the first supervisor to monitor the second one.
+--
+-- If you run this program, hopefully you should see on stdout
+-- something like this:
+--
+-- > ChildBorn ThreadId 62 2015-02-13 11:51:15.293882 UTC
+-- > ChildBorn ThreadId 63 2015-02-13 11:51:15.293897 UTC
+-- > ChildBorn ThreadId 64 2015-02-13 11:51:15.293904 UTC
+-- > ChildDied ThreadId 61 (MonitoredSupervision ThreadId 61) 2015-02-13 11:51:15.293941 UTC
+-- > ChildBorn ThreadId 65 2015-02-13 11:51:15.294014 UTC
+-- > ChildFinished ThreadId 64 2015-02-13 11:51:18.294797 UTC
+-- > ChildDied ThreadId 63 thread killed 2015-02-13 11:51:18.294909 UTC
+-- > ChildDied ThreadId 62 Oh boy, I'm good as dead 2015-02-13 11:51:20.294861 UTC
+-- > ChildRestarted ThreadId 62 ThreadId 68 OneForOne 2015-02-13 11:51:20.294861 UTC
+-- > ChildFinished ThreadId 65 2015-02-13 11:51:22.296089 UTC
+-- > ChildDied ThreadId 68 Oh boy, I'm good as dead 2015-02-13 11:51:25.296189 UTC
+-- > ChildRestarted ThreadId 68 ThreadId 69 OneForOne 2015-02-13 11:51:25.296189 UTC
+-- > ChildDied ThreadId 69 Oh boy, I'm good as dead 2015-02-13 11:51:30.297464 UTC
+-- > ChildRestarted ThreadId 69 ThreadId 70 OneForOne 2015-02-13 11:51:30.297464 UTC
+-- > ChildDied ThreadId 70 Oh boy, I'm good as dead 2015-02-13 11:51:35.298123 UTC
+-- > ChildRestarted ThreadId 70 ThreadId 71 OneForOne 2015-02-13 11:51:35.298123 UTC
+
+-- $conclusions
+-- I hope that you are now convinced that this library can be of some use to you!

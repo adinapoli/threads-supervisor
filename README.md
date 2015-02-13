@@ -2,10 +2,11 @@
 
 # Threads-Supervisor
 
-This library implement a
+This library implement a simple, IO-based, forkIO-friendly library for Erlang-style thread supervision.
 
 # Example
 
+Start from `Control.concurrent.Supervisor.Tutorial`. Other example can be found inside `examples`.
 
 # Installation
 

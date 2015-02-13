@@ -18,12 +18,12 @@ module Control.Concurrent.Supervisor
   , RestartAction
   , SupervisionEvent(..)
   , RestartStrategy(..)
-  -- * Creating a new supervisor
+  -- * Creating a new supervisor spec
   -- $new
-  , newSupervisor
-  -- * Start the supervision process
+  , newSupervisorSpec
+  -- * Creating a new supervisor
   -- $sup
-  , supervise
+  , newSupervisor
   -- * Stopping a supervisor
   -- $shutdown
   , shutdownSupervisor
@@ -57,13 +57,13 @@ data Supervisor_ a where
      NewSupervisor :: {
         _ns_myTid    :: !(Maybe ThreadId)
       , _ns_children :: !(IORef (Map.HashMap ThreadId Child))
-      , _ns_mailbox :: TQueue DeadLetter
+      , _ns_mailbox :: TChan DeadLetter
       , _ns_eventStream :: TBQueue SupervisionEvent
       } -> Supervisor_ Uninitialised
      Supervisor :: {
         _sp_myTid    :: !(Maybe ThreadId)
       , _sp_children :: !(IORef (Map.HashMap ThreadId Child))
-      , _sp_mailbox :: TQueue DeadLetter
+      , _sp_mailbox :: TChan DeadLetter
       , _sp_eventStream :: TBQueue SupervisionEvent
       } -> Supervisor_ Initialised
 
@@ -103,12 +103,25 @@ data RestartStrategy =
 -- | Creates a new 'SupervisorSpec'. The reason it doesn't return a
 -- 'Supervisor' is to force you to call 'supervise' explicitly, in order to start the
 -- supervisor thread.
-newSupervisor :: IO SupervisorSpec
-newSupervisor = do
-  tkn <- newTQueueIO
+newSupervisorSpec :: IO SupervisorSpec
+newSupervisorSpec = do
+  tkn <- newTChanIO
   evt <- newTBQueueIO 1000
   ref <- newIORef Map.empty
   return $ NewSupervisor Nothing ref tkn evt
+
+-- $supervise
+
+--------------------------------------------------------------------------------
+newSupervisor :: SupervisorSpec -> IO Supervisor
+newSupervisor spec = forkIO (handleEvents spec) >>= \tid -> do
+  mbx <- atomically $ dupTChan (_ns_mailbox spec)
+  return $ Supervisor {
+    _sp_myTid = Just tid
+  , _sp_mailbox = mbx
+  , _sp_children = _ns_children spec
+  , _sp_eventStream = _ns_eventStream spec
+  }
 
 -- $log
 
@@ -176,27 +189,16 @@ writeIfNotFull q evt = atomically $ do
 supervised :: Supervisor -> IO () -> IO ThreadId
 supervised Supervisor{..} act = forkFinally act $ \res -> case res of
   Left ex -> bracket myThreadId return $ \myId -> atomically $ 
-    writeTQueue _sp_mailbox (DeadLetter myId ex)
+    writeTChan _sp_mailbox (DeadLetter myId ex)
   Right _ -> bracket myThreadId return $ \myId -> do
     now <- getCurrentTime
     atomicModifyIORef' _sp_children $ \chMap -> (Map.delete myId chMap, ())
     writeIfNotFull _sp_eventStream (ChildFinished myId now)
 
--- $supervise
-
---------------------------------------------------------------------------------
-supervise :: SupervisorSpec -> IO Supervisor
-supervise spec = forkIO (handleEvents spec) >>= \tid -> return $ Supervisor {
-    _sp_myTid = Just tid
-  , _sp_mailbox = _ns_mailbox spec
-  , _sp_children = _ns_children spec
-  , _sp_eventStream = _ns_eventStream spec
-  }
-
 --------------------------------------------------------------------------------
 handleEvents :: SupervisorSpec -> IO ()
 handleEvents sp@(NewSupervisor myId myChildren myMailbox myStream) = do
-  (DeadLetter newDeath ex) <- atomically $ readTQueue myMailbox
+  (DeadLetter newDeath ex) <- atomically $ readTChan myMailbox
   now <- getCurrentTime
   writeIfNotFull myStream (ChildDied newDeath ex now)
   case asyncExceptionFromException ex of
@@ -235,4 +237,4 @@ monitor (Supervisor _ _ mbox _) (Supervisor mbId _ _ _) = do
   case mbId of
     Nothing -> return ()
     Just tid -> atomically $
-      writeTQueue mbox (DeadLetter tid (toException $ MonitoredSupervision tid))
+      writeTChan mbox (DeadLetter tid (toException $ MonitoredSupervision tid))
