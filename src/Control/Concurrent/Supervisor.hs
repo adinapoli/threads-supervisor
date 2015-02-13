@@ -9,26 +9,41 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE DeriveDataTypeable #-}
 
 module Control.Concurrent.Supervisor 
-  ( Supervisor
+  ( SupervisorSpec
+  , Supervisor
   , DeadLetter
-  , Child(..)
   , RestartAction
   , SupervisionEvent(..)
   , RestartStrategy(..)
+  -- * Creating a new supervisor
+  -- $new
   , newSupervisor
+  -- * Start the supervision process
+  -- $sup
+  , supervise
+  -- * Stopping a supervisor
+  -- $shutdown
   , shutdownSupervisor
+  -- * Accessing Supervisor event log
+  -- $log
   , eventStream
   , activeChildren
-  , supervise
+  -- * Supervise a forked thread
+  -- $fork
   , forkSupervised
+  -- * Monitor another supervisor
+  -- $monitor
+  , monitor
   ) where
 
 import qualified Data.HashMap.Strict as Map
 import           Control.Concurrent
 import           Control.Concurrent.STM
 import           Data.IORef
+import           Data.Typeable
 import           Control.Exception
 import           Control.Monad
 import           Data.Time
@@ -80,8 +95,14 @@ data RestartStrategy =
      OneForOne
      deriving Show
 
+-- $new
+-- In order to create a new supervisor, you need a `SupervisorSpec`,
+-- which can be acquired by a call to `newSupervisor`:
+
 --------------------------------------------------------------------------------
--- | Creates a new supervisor
+-- | Creates a new 'SupervisorSpec'. The reason it doesn't return a
+-- 'Supervisor' is to force you to call 'supervise' explicitly, in order to start the
+-- supervisor thread.
 newSupervisor :: IO SupervisorSpec
 newSupervisor = do
   tkn <- newTQueueIO
@@ -89,25 +110,44 @@ newSupervisor = do
   ref <- newIORef Map.empty
   return $ NewSupervisor Nothing ref tkn evt
 
+-- $log
+
 --------------------------------------------------------------------------------
+-- | Gives you access to the event this supervisor is generating, allowing you
+-- to react. It's using a bounded queue to explicitly avoid memory leaks in case
+-- you do not want to drain the queue to listen to incoming events.
 eventStream :: Supervisor -> TBQueue SupervisionEvent
 eventStream (Supervisor _ _ _ e) = e
 
 --------------------------------------------------------------------------------
+-- | Returns the number of active threads at a given moment in time.
 activeChildren :: Supervisor -> IO Int
 activeChildren (Supervisor _ chRef _ _) = do
   readIORef chRef >>= return . length . Map.keys
 
+-- $shutdown
+
 --------------------------------------------------------------------------------
 -- | Shutdown the given supervisor. This will cause the supervised children to
--- be killed as well.
+-- be killed as well. To do so, we explore the children tree, killing workers as we go,
+-- and recursively calling `shutdownSupervisor` in case we hit a monitored `Supervisor`.
 shutdownSupervisor :: Supervisor -> IO ()
 shutdownSupervisor (Supervisor sId chRef _ _) = do
-  case sId of 
+  case sId of
     Nothing -> return ()
     Just tid -> do
-      readIORef chRef >>= \chMap -> forM_ (Map.keys chMap) killThread
+      chMap <- readIORef chRef
+      processChildren (Map.toList chMap)
       killThread tid
+  where
+    processChildren [] = return ()
+    processChildren (x:xs) = do
+      case x of
+        (tid, Worker _ _) -> killThread tid
+        (_, Supvsr _ s) -> shutdownSupervisor s
+      processChildren xs
+
+-- $fork
 
 --------------------------------------------------------------------------------
 -- | Fork a thread in a supervised mode.
@@ -142,35 +182,57 @@ supervised Supervisor{..} act = forkFinally act $ \res -> case res of
     atomicModifyIORef' _sp_children $ \chMap -> (Map.delete myId chMap, ())
     writeIfNotFull _sp_eventStream (ChildFinished myId now)
 
+-- $supervise
+
 --------------------------------------------------------------------------------
 supervise :: SupervisorSpec -> IO Supervisor
-supervise spec = forkIO (go spec) >>= \tid -> return $ Supervisor {
+supervise spec = forkIO (handleEvents spec) >>= \tid -> return $ Supervisor {
     _sp_myTid = Just tid
   , _sp_mailbox = _ns_mailbox spec
   , _sp_children = _ns_children spec
   , _sp_eventStream = _ns_eventStream spec
   }
-  where
-   go :: SupervisorSpec -> IO ()
-   go sp@NewSupervisor{..} = do
-     (DeadLetter newDeath ex) <- atomically $ readTQueue _ns_mailbox
-     now <- getCurrentTime
-     writeIfNotFull _ns_eventStream (ChildDied newDeath ex now)
-     case asyncExceptionFromException ex of
-       Just ThreadKilled -> go sp
-       _ -> do
-        chMap <- readIORef _ns_children
-        case Map.lookup newDeath chMap of
-          Nothing -> go sp
-          Just ch@(Worker str act) -> case str of
-            OneForOne -> do
-              newThreadId <- act newDeath
-              writeIORef _ns_children (Map.insert newThreadId ch $! Map.delete newDeath chMap)
-              writeIfNotFull _ns_eventStream (ChildRestarted newDeath newThreadId str now)
-              go sp
-          Just ch@(Supvsr str (Supervisor _ mbx cld es)) -> case str of
-            OneForOne -> do
-              newThreadId <- forkIO (go $ NewSupervisor Nothing mbx cld es)
-              writeIORef _ns_children (Map.insert newThreadId ch $! Map.delete newDeath chMap)
-              writeIfNotFull _ns_eventStream (ChildRestarted newDeath newThreadId str now)
-              go sp
+
+--------------------------------------------------------------------------------
+handleEvents :: SupervisorSpec -> IO ()
+handleEvents sp@(NewSupervisor myId myChildren myMailbox myStream) = do
+  (DeadLetter newDeath ex) <- atomically $ readTQueue myMailbox
+  now <- getCurrentTime
+  writeIfNotFull myStream (ChildDied newDeath ex now)
+  case asyncExceptionFromException ex of
+    Just ThreadKilled -> handleEvents sp
+    _ -> do
+     chMap <- readIORef myChildren
+     case Map.lookup newDeath chMap of
+       Nothing -> handleEvents sp
+       Just ch@(Worker str act) -> case str of
+         OneForOne -> do
+           newThreadId <- act newDeath
+           writeIORef myChildren (Map.insert newThreadId ch $! Map.delete newDeath chMap)
+           writeIfNotFull myStream (ChildRestarted newDeath newThreadId str now)
+           handleEvents sp
+       Just ch@(Supvsr str (Supervisor _ mbx cld es)) -> case str of
+         OneForOne -> do
+           let node = Supervisor myId myChildren myMailbox myStream
+           newThreadId <- supervised node (handleEvents $ NewSupervisor Nothing mbx cld es)
+           writeIORef myChildren (Map.insert newThreadId ch $! Map.delete newDeath chMap)
+           writeIfNotFull myStream (ChildRestarted newDeath newThreadId str now)
+           handleEvents sp
+
+-- $monitor
+
+newtype MonitorRequest = MonitoredSupervision ThreadId deriving (Show, Typeable)
+
+instance Exception MonitorRequest
+
+--------------------------------------------------------------------------------
+-- | Monitor another supervisor. To achieve these, we simulate a new 'DeadLetter',
+-- so that the first supervisor will effectively restart the monitored one.
+-- Thanks to the fact that for the supervisor the restart means we just copy over
+-- its internal state, it should be perfectly fine to do so.
+monitor :: Supervisor -> Supervisor -> IO ()
+monitor (Supervisor _ _ mbox _) (Supervisor mbId _ _ _) = do
+  case mbId of
+    Nothing -> return ()
+    Just tid -> atomically $
+      writeTQueue mbox (DeadLetter tid (toException $ MonitoredSupervision tid))
