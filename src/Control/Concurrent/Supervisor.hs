@@ -53,19 +53,12 @@ data Uninitialised
 data Initialised
 
 --------------------------------------------------------------------------------
-data Supervisor_ a where
-     NewSupervisor :: {
-        _ns_myTid    :: !(Maybe ThreadId)
-      , _ns_children :: !(IORef (Map.HashMap ThreadId Child))
-      , _ns_mailbox :: TChan DeadLetter
-      , _ns_eventStream :: TBQueue SupervisionEvent
-      } -> Supervisor_ Uninitialised
-     Supervisor :: {
+data Supervisor_ a = Supervisor_ {
         _sp_myTid    :: !(Maybe ThreadId)
       , _sp_children :: !(IORef (Map.HashMap ThreadId Child))
       , _sp_mailbox :: TChan DeadLetter
       , _sp_eventStream :: TBQueue SupervisionEvent
-      } -> Supervisor_ Initialised
+      }
 
 type SupervisorSpec = Supervisor_ Uninitialised
 type Supervisor = Supervisor_ Initialised
@@ -108,19 +101,19 @@ newSupervisorSpec = do
   tkn <- newTChanIO
   evt <- newTBQueueIO 1000
   ref <- newIORef Map.empty
-  return $ NewSupervisor Nothing ref tkn evt
+  return $ Supervisor_ Nothing ref tkn evt
 
 -- $supervise
 
 --------------------------------------------------------------------------------
 newSupervisor :: SupervisorSpec -> IO Supervisor
 newSupervisor spec = forkIO (handleEvents spec) >>= \tid -> do
-  mbx <- atomically $ dupTChan (_ns_mailbox spec)
-  return $ Supervisor {
+  mbx <- atomically $ dupTChan (_sp_mailbox spec)
+  return Supervisor_ {
     _sp_myTid = Just tid
   , _sp_mailbox = mbx
-  , _sp_children = _ns_children spec
-  , _sp_eventStream = _ns_eventStream spec
+  , _sp_children = _sp_children spec
+  , _sp_eventStream = _sp_eventStream spec
   }
 
 -- $log
@@ -130,12 +123,12 @@ newSupervisor spec = forkIO (handleEvents spec) >>= \tid -> do
 -- to react. It's using a bounded queue to explicitly avoid memory leaks in case
 -- you do not want to drain the queue to listen to incoming events.
 eventStream :: Supervisor -> TBQueue SupervisionEvent
-eventStream (Supervisor _ _ _ e) = e
+eventStream (Supervisor_ _ _ _ e) = e
 
 --------------------------------------------------------------------------------
 -- | Returns the number of active threads at a given moment in time.
 activeChildren :: Supervisor -> IO Int
-activeChildren (Supervisor _ chRef _ _) = do
+activeChildren (Supervisor_ _ chRef _ _) = do
   readIORef chRef >>= return . length . Map.keys
 
 -- $shutdown
@@ -145,7 +138,7 @@ activeChildren (Supervisor _ chRef _ _) = do
 -- be killed as well. To do so, we explore the children tree, killing workers as we go,
 -- and recursively calling `shutdownSupervisor` in case we hit a monitored `Supervisor`.
 shutdownSupervisor :: Supervisor -> IO ()
-shutdownSupervisor (Supervisor sId chRef _ _) = do
+shutdownSupervisor (Supervisor_ sId chRef _ _) = do
   case sId of
     Nothing -> return ()
     Just tid -> do
@@ -171,7 +164,7 @@ forkSupervised :: Supervisor
                -> IO ()
                -- ^ The computation to run
                -> IO ThreadId
-forkSupervised sup@Supervisor{..} str act =
+forkSupervised sup@Supervisor_{..} str act =
   bracket (supervised sup act) return $ \newChild -> do
     let ch = Worker str (const (supervised sup act))
     atomicModifyIORef' _sp_children $ \chMap -> (Map.insert newChild ch chMap, ())
@@ -187,7 +180,7 @@ writeIfNotFull q evt = atomically $ do
 
 --------------------------------------------------------------------------------
 supervised :: Supervisor -> IO () -> IO ThreadId
-supervised Supervisor{..} act = forkFinally act $ \res -> case res of
+supervised Supervisor_{..} act = forkFinally act $ \res -> case res of
   Left ex -> bracket myThreadId return $ \myId -> atomically $ 
     writeTChan _sp_mailbox (DeadLetter myId ex)
   Right _ -> bracket myThreadId return $ \myId -> do
@@ -197,7 +190,7 @@ supervised Supervisor{..} act = forkFinally act $ \res -> case res of
 
 --------------------------------------------------------------------------------
 handleEvents :: SupervisorSpec -> IO ()
-handleEvents sp@(NewSupervisor myId myChildren myMailbox myStream) = do
+handleEvents sp@(Supervisor_ myId myChildren myMailbox myStream) = do
   (DeadLetter newDeath ex) <- atomically $ readTChan myMailbox
   now <- getCurrentTime
   writeIfNotFull myStream (ChildDied newDeath ex now)
@@ -213,10 +206,10 @@ handleEvents sp@(NewSupervisor myId myChildren myMailbox myStream) = do
            writeIORef myChildren (Map.insert newThreadId ch $! Map.delete newDeath chMap)
            writeIfNotFull myStream (ChildRestarted newDeath newThreadId str now)
            handleEvents sp
-       Just ch@(Supvsr str (Supervisor _ mbx cld es)) -> case str of
+       Just ch@(Supvsr str (Supervisor_ _ mbx cld es)) -> case str of
          OneForOne -> do
-           let node = Supervisor myId myChildren myMailbox myStream
-           newThreadId <- supervised node (handleEvents $ NewSupervisor Nothing mbx cld es)
+           let node = Supervisor_ myId myChildren myMailbox myStream
+           newThreadId <- supervised node (handleEvents $ Supervisor_ Nothing mbx cld es)
            writeIORef myChildren (Map.insert newThreadId ch $! Map.delete newDeath chMap)
            writeIfNotFull myStream (ChildRestarted newDeath newThreadId str now)
            handleEvents sp
@@ -233,7 +226,7 @@ instance Exception MonitorRequest
 -- Thanks to the fact that for the supervisor the restart means we just copy over
 -- its internal state, it should be perfectly fine to do so.
 monitor :: Supervisor -> Supervisor -> IO ()
-monitor (Supervisor _ _ mbox _) (Supervisor mbId _ _ _) = do
+monitor (Supervisor_ _ _ mbox _) (Supervisor_ mbId _ _ _) = do
   case mbId of
     Nothing -> return ()
     Just tid -> atomically $

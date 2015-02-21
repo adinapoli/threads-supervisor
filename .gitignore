@@ -6,5 +6,5 @@ shell.nix
 **/**/.DS_Store
 **/**.o
 **/**.hi
-example/**.hi
-example/**.o
+examples/**.hi
+examples/**.o
