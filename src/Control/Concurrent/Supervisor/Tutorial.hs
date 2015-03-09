@@ -93,7 +93,7 @@ module Control.Concurrent.Supervisor.Tutorial
 -- > type Supervisor = Supervisor_ Initialised
 -- The important difference though, is that the `SupervisorSpec` does not imply the creation
 -- of an asynchronous thread, which the latter does. To keep separated the initialisation
--- of the data structure from the logic of supervising, we use GADTs and type synonyms to
+-- of the data structure from the logic of supervising, we use  phantom types to
 -- force you create a spec first.
 -- Creating a spec it just a matter of calling `newSupervisorSpec`.
 

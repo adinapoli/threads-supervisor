@@ -24,6 +24,8 @@ module Control.Concurrent.Supervisor
   -- * Creating a new supervisor
   -- $sup
   , newSupervisor
+  -- * Restart Strategies
+  , oneForOne
   -- * Stopping a supervisor
   -- $shutdown
   , shutdownSupervisor
@@ -46,6 +48,7 @@ import           Data.IORef
 import           Data.Typeable
 import           Control.Exception
 import           Control.Monad
+import           Control.Retry
 import           Data.Time
 
 --------------------------------------------------------------------------------
@@ -78,6 +81,7 @@ data SupervisionEvent =
      ChildBorn !ThreadId !UTCTime
    | ChildDied !ThreadId !SomeException !UTCTime
    | ChildRestarted !ThreadId !ThreadId !RestartStrategy !UTCTime
+   | ChildRestartLimitReached !ThreadId !RestartStrategy !UTCTime
    | ChildFinished !ThreadId !UTCTime
    deriving Show
 
@@ -85,8 +89,16 @@ data SupervisionEvent =
 -- | Erlang inspired strategies. At the moment only the 'OneForOne' is
 -- implemented.
 data RestartStrategy =
-     OneForOne
-     deriving Show
+     OneForOne !Int RetryPolicy
+
+instance Show RestartStrategy where
+  show (OneForOne r _) = "OneForOne (Restarted " <> show r <> " times)"
+
+--------------------------------------------------------------------------------
+-- | Smart constructor which offers a default throttling based on
+-- fibonacci numbers.
+oneForOne :: RestartStrategy
+oneForOne = OneForOne 0 $ fibonacciBackoff 100
 
 -- $new
 -- In order to create a new supervisor, you need a `SupervisorSpec`,
@@ -199,20 +211,31 @@ handleEvents sp@(Supervisor_ myId myChildren myMailbox myStream) = do
     _ -> do
      chMap <- readIORef myChildren
      case Map.lookup newDeath chMap of
-       Nothing -> handleEvents sp
-       Just ch@(Worker str act) -> case str of
-         OneForOne -> do
+       Nothing -> return ()
+       Just (Worker str act) ->
+         applyStrategy str (\newStr -> writeIfNotFull myStream (ChildRestartLimitReached newDeath newStr now)) $ \newStr -> do
+           let ch = Worker newStr act
            newThreadId <- act newDeath
            writeIORef myChildren (Map.insert newThreadId ch $! Map.delete newDeath chMap)
-           writeIfNotFull myStream (ChildRestarted newDeath newThreadId str now)
-           handleEvents sp
-       Just ch@(Supvsr str (Supervisor_ _ mbx cld es)) -> case str of
-         OneForOne -> do
+           writeIfNotFull myStream (ChildRestarted newDeath newThreadId newStr now)
+       Just (Supvsr str s@(Supervisor_ _ mbx cld es)) ->
+         applyStrategy str (\newStr -> writeIfNotFull myStream (ChildRestartLimitReached newDeath newStr now)) $ \newStr -> do
            let node = Supervisor_ myId myChildren myMailbox myStream
+           let ch = (Supvsr newStr s)
            newThreadId <- supervised node (handleEvents $ Supervisor_ Nothing mbx cld es)
            writeIORef myChildren (Map.insert newThreadId ch $! Map.delete newDeath chMap)
-           writeIfNotFull myStream (ChildRestarted newDeath newThreadId str now)
-           handleEvents sp
+           writeIfNotFull myStream (ChildRestarted newDeath newThreadId newStr now)
+     handleEvents sp
+  where
+    applyStrategy :: RestartStrategy
+                  -> (RestartStrategy -> IO ())
+                  -> (RestartStrategy -> IO ())
+                  -> IO ()
+    applyStrategy (OneForOne currentRestarts retryPol) ifAbort ifThrottle = do
+      let newStr = OneForOne (currentRestarts + 1) retryPol
+      case getRetryPolicy retryPol (currentRestarts + 1) of
+        Nothing -> ifAbort newStr
+        Just delay -> threadDelay delay >> ifThrottle newStr
 
 -- $monitor
 

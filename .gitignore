@@ -1,6 +1,7 @@
 dist
 .cabal-sandbox
 cabal.sandbox.config
+cabal.config
 shell.nix
 .hub
 **/**/.DS_Store
