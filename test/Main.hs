@@ -2,6 +2,7 @@
 module Main where
 
 import           Test.Tasty
+import           Test.Tasty.HUnit
 import           Test.Tasty.QuickCheck
 import           Test.QuickCheck.Monadic
 import           Tests
@@ -26,5 +27,6 @@ allTests = testGroup "All Tests" [
       , testProperty "1 supervised thread, premature exception" (monadicIO test1SupThreadPrematureDemise)
       , testProperty "killing spree" (monadicIO testKillingSpree)
       , testProperty "cleanup" (monadicIO testSupCleanup)
+      , testCase "too many restarts" testTooManyRestarts
     ]
   ]
