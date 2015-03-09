@@ -9,3 +9,4 @@ shell.nix
 **/**.hi
 examples/**.hi
 examples/**.o
+threads-supervisor-example*
