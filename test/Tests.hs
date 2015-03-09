@@ -9,6 +9,7 @@ import           Test.Tasty.QuickCheck
 import           Test.QuickCheck.Monadic as QM
 import qualified Data.List as List
 import           Control.Monad
+import           Control.Retry
 import           Control.Monad.Trans.Class
 import           Control.Applicative
 import           Control.Concurrent
@@ -86,9 +87,9 @@ qToList q = do
 assertContainsNMsg :: (SupervisionEvent -> Bool) 
                    -> Int
                    -> [SupervisionEvent] 
-                   -> IOProperty ()
-assertContainsNMsg _ 0 _ = QM.assert True
-assertContainsNMsg _ x [] = lift $
+                   -> IO ()
+assertContainsNMsg _ 0 _ = HUnit.assertBool "" True
+assertContainsNMsg _ x [] = do
   HUnit.assertBool ("assertContainsNMsg: list exhausted and " ++ show x ++ " left.") False
 assertContainsNMsg matcher !n (x:xs) = case matcher x of
   True  -> assertContainsNMsg matcher (n - 1) xs
@@ -96,16 +97,23 @@ assertContainsNMsg matcher !n (x:xs) = case matcher x of
 
 --------------------------------------------------------------------------------
 assertContainsNRestartMsg :: Int -> [SupervisionEvent] -> IOProperty ()
-assertContainsNRestartMsg = assertContainsNMsg matches
+assertContainsNRestartMsg n e = lift $ assertContainsNMsg matches n e
   where
     matches (ChildRestarted{}) = True
     matches _ = False
 
 --------------------------------------------------------------------------------
 assertContainsNFinishedMsg :: Int -> [SupervisionEvent] -> IOProperty ()
-assertContainsNFinishedMsg = assertContainsNMsg matches
+assertContainsNFinishedMsg n e = lift $ assertContainsNMsg matches n e
   where
     matches (ChildFinished{}) = True
+    matches _ = False
+
+--------------------------------------------------------------------------------
+assertContainsNLimitReached :: Int -> [SupervisionEvent] -> IO ()
+assertContainsNLimitReached = assertContainsNMsg matches
+  where
+    matches (ChildRestartLimitReached{}) = True
     matches _ = False
 
 --------------------------------------------------------------------------------
@@ -122,7 +130,7 @@ test1SupThreadNoEx :: IOProperty ()
 test1SupThreadNoEx = forAllM randomLiveTime $ \ttl -> do
   supSpec <- lift newSupervisorSpec
   sup <- lift $ newSupervisor supSpec
-  _ <- lift (forkSupervised sup OneForOne (forever $ threadDelay ttl))
+  _ <- lift (forkSupervised sup oneForOne (forever $ threadDelay ttl))
   assertActiveThreads sup (== 1)
   lift $ shutdownSupervisor sup
 
@@ -131,7 +139,7 @@ test1SupThreadPrematureDemise :: IOProperty ()
 test1SupThreadPrematureDemise = forAllM randomLiveTime $ \ttl -> do
   supSpec <- lift newSupervisorSpec
   sup <- lift $ newSupervisor supSpec
-  tid <- lift (forkSupervised sup OneForOne (forever $ threadDelay ttl))
+  tid <- lift (forkSupervised sup oneForOne (forever $ threadDelay ttl))
   lift $ do
     throwTo tid (AssertionFailed "You must die")
     threadDelay ttl --give time to restart the thread
@@ -142,9 +150,9 @@ test1SupThreadPrematureDemise = forAllM randomLiveTime $ \ttl -> do
 
 --------------------------------------------------------------------------------
 fromAction :: Supervisor -> ThreadAction -> IO ThreadId
-fromAction s Live = forkSupervised s OneForOne (forever $ threadDelay 100000000)
-fromAction s (DieAfter (TTL ttl)) = forkSupervised s OneForOne (threadDelay ttl)
-fromAction s (ThrowAfter (TTL ttl)) = forkSupervised s OneForOne (do
+fromAction s Live = forkSupervised s oneForOne (forever $ threadDelay 100000000)
+fromAction s (DieAfter (TTL ttl)) = forkSupervised s oneForOne (threadDelay ttl)
+fromAction s (ThrowAfter (TTL ttl)) = forkSupervised s oneForOne (do
   threadDelay ttl 
   throwIO $ AssertionFailed "die")
 
@@ -187,3 +195,13 @@ testSupCleanup = forAllM (vectorOf 100 arbitrary) $ \ttls -> do
   assertActiveThreads sup (== 0)
   assertContainsNFinishedMsg (length acts) q
   lift $ shutdownSupervisor sup
+
+testTooManyRestarts :: Assertion
+testTooManyRestarts = do
+  supSpec <- newSupervisorSpec
+  sup <- newSupervisor supSpec
+  _ <- forkSupervised sup (OneForOne 0 $ limitRetries 5) $ error "die"
+  threadDelay 2000000
+  q <- qToList (eventStream sup)
+  assertContainsNLimitReached 1 q
+  shutdownSupervisor sup

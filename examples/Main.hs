@@ -26,6 +26,9 @@ job3 = do
 job4 :: IO ()
 job4 = threadDelay 7000000
 
+job5 :: IO ()
+job5 = threadDelay 100 >> error "dead"
+
 main :: IO ()
 main = bracketOnError (do
   supSpec <- newSupervisorSpec
@@ -35,11 +38,12 @@ main = bracketOnError (do
 
   sup1 `monitor` sup2
 
-  _ <- forkSupervised sup2 OneForOne job3
+  _ <- forkSupervised sup2 oneForOne job3
 
-  j1 <- forkSupervised sup1 OneForOne job1
-  _ <- forkSupervised sup1 OneForOne (job2 j1)
-  _ <- forkSupervised sup1 OneForOne job4
+  j1 <- forkSupervised sup1 oneForOne job1
+  _ <- forkSupervised sup1 oneForOne (job2 j1)
+  _ <- forkSupervised sup1 oneForOne job4
+  _ <- forkSupervised sup1 oneForOne job5
   _ <- forkIO (go (eventStream sup1))
   return sup1) shutdownSupervisor (\_ -> threadDelay 10000000000)
   where

@@ -1,6 +1,7 @@
 dist
 .cabal-sandbox
 cabal.sandbox.config
+cabal.config
 shell.nix
 .hub
 **/**/.DS_Store
@@ -8,3 +9,4 @@ shell.nix
 **/**.hi
 examples/**.hi
 examples/**.o
+threads-supervisor-example*
