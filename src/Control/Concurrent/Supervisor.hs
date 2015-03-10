@@ -6,7 +6,6 @@
 
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE DeriveDataTypeable #-}
@@ -45,8 +44,8 @@ import qualified Data.HashMap.Strict as Map
 import           Control.Concurrent
 import           Control.Concurrent.STM
 import           Data.IORef
-import           Data.Typeable
 import           Control.Exception
+import           Data.Typeable
 import           Control.Monad
 import           Control.Retry
 import           Data.Time
@@ -206,9 +205,11 @@ handleEvents sp@(Supervisor_ myId myChildren myMailbox myStream) = do
   (DeadLetter newDeath ex) <- atomically $ readTChan myMailbox
   now <- getCurrentTime
   writeIfNotFull myStream (ChildDied newDeath ex now)
-  case asyncExceptionFromException ex of
-    Just ThreadKilled -> handleEvents sp
-    _ -> do
+  -- If we catch an `AsyncException`, we have nothing but good
+  -- reasons not to restart the thread.
+  case typeOf ex == (typeOf (undefined :: AsyncException)) of
+    True -> handleEvents sp
+    False -> do
      chMap <- readIORef myChildren
      case Map.lookup newDeath chMap of
        Nothing -> return ()

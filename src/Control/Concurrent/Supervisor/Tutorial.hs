@@ -114,11 +114,11 @@ module Control.Concurrent.Supervisor.Tutorial
 -- >
 -- >   sup1 `monitor` sup2
 -- >
--- >   _ <- forkSupervised sup2 OneForOne job3
+-- >   _ <- forkSupervised sup2 oneForOne job3
 -- >
--- >   j1 <- forkSupervised sup1 OneForOne job1
--- >   _ <- forkSupervised sup1 OneForOne (job2 j1)
--- >   _ <- forkSupervised sup1 OneForOne job4
+-- >   j1 <- forkSupervised sup1 oneForOne job1
+-- >   _ <- forkSupervised sup1 oneForOne (job2 j1)
+-- >   _ <- forkSupervised sup1 oneForOne job4
 -- >   _ <- forkIO (go (eventStream sup1))
 -- >   return sup1) shutdownSupervisor (\_ -> threadDelay 10000000000)
 -- >   where
@@ -135,6 +135,16 @@ module Control.Concurrent.Supervisor.Tutorial
 -- in the very same example, we also create another supervisor
 -- (from the same spec, but you can create a separate one as well)
 -- and we ask the first supervisor to monitor the second one.
+--
+-- `oneForOne` is a smart constructor for our `RestartStrategy`,which creates
+-- under the hood a `OneForOne`  strategy which is using the `fibonacciBackoff`
+-- as `RetryPolicy` from the "retry" package. The clear advantage is that
+-- you are not obliged to use it if you don't like this sensible default;
+-- `RetryPolicy` is an monoid, so you can compose retry policies as you wish.
+--
+-- The `RetryPolicy` will also be responsible for determining whether a thread can be
+-- restarted or not; in the latter case you will find a `ChildRestartedLimitReached`
+-- in your event log.
 --
 -- If you run this program, hopefully you should see on stdout
 -- something like this:

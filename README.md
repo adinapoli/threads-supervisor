@@ -6,7 +6,7 @@ This library implement a simple, IO-based, forkIO-friendly library for Erlang-st
 
 # Changelog
 
-* 0.1.3.0
+* 1.0.3.0
     - Added restart throttling using `RetryPolicy` from the [retry](http://hackage.haskell.org/package/retry) package.
 
 # Example
