@@ -21,4 +21,4 @@ install:
  - stack build --only-snapshot --no-terminal
 
 script:
- - stack --no-terminal --test
+ - stack --no-terminal test
