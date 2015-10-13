@@ -1,22 +1,10 @@
-# See https://github.com/hvr/multi-ghc-travis
-# The following enables several GHC versions to be tested; often it's enough to test only against the last release in a major GHC version. Feel free to omit lines listings versions you don't need/want testing for.
-
-notifications:
-  email: false
+language: haskell
 
 sudo: false
 
-env:
- - GHCVER=7.6.3  CABALVER=1.16
- - GHCVER=7.8.2  CABALVER=1.18
- - GHCVER=7.8.3  CABALVER=1.18
- - GHCVER=7.8.4  CABALVER=1.22
- - GHCVER=7.10.2 CABALVER=1.22
- - GHCVER=head   CABALVER=1.22
 
-matrix:
-  allow_failures:
-   - env: GHCVER=head  CABALVER=1.22
+notifications:
+  email: false
 
 cache:
   directories:
@@ -30,8 +18,8 @@ before_install:
   - chmod a+x ~/.local/bin/stack
 
 install:
- - stack --no-terminal --skip-ghc-check install
+ - stack setup --no-terminal
+ - stack build --only-snapshot --no-terminal
 
 script:
- - stack --no-terminal --skip-ghc-check build --test
- - stack --no-terminal --skip-ghc-check sdist
+ - stack --no-terminal --test
