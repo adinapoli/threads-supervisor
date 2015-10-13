@@ -221,6 +221,8 @@ handleEvents sp@(Supervisor_ myId myChildren myMailbox myStream) = do
   atomically $ writeQueue myStream (ChildDied newDeath ex now)
   -- If we catch an `AsyncException`, we have nothing but good
   -- reasons not to restart the thread.
+  -- Note to the skeptical: It's perfectly fine do put `undefined` here,
+  -- as `typeOf` does not inspect the content (try in GHCi!)
   case typeOf ex == (typeOf (undefined :: AsyncException)) of
     True -> handleEvents sp
     False -> do

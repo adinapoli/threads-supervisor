@@ -6,6 +6,7 @@ import           Test.Tasty.HUnit
 import           Test.Tasty.QuickCheck
 import           Test.QuickCheck.Monadic
 import           Tests
+import qualified Tests.Bounded as B
 
 
 --------------------------------------------------------------------------------
@@ -22,11 +23,18 @@ withQuickCheckDepth tn depth tests =
 --------------------------------------------------------------------------------
 allTests :: TestTree
 allTests = testGroup "All Tests" [
-    withQuickCheckDepth "Control.Concurrent.Supervisor" 10 [
+    withQuickCheckDepth "Control.Concurrent.Supervisor" 20 [
         testProperty "1 supervised thread, no exceptions" (monadicIO test1SupThreadNoEx)
       , testProperty "1 supervised thread, premature exception" (monadicIO test1SupThreadPrematureDemise)
       , testProperty "killing spree" (monadicIO testKillingSpree)
       , testProperty "cleanup" (monadicIO testSupCleanup)
       , testCase "too many restarts" testTooManyRestarts
+    ]
+    , withQuickCheckDepth "Control.Concurrent.Supervisor.Bounded" 20 [
+        testProperty "1 supervised thread, no exceptions" (monadicIO B.test1SupThreadNoEx)
+      , testProperty "1 supervised thread, premature exception" (monadicIO B.test1SupThreadPrematureDemise)
+      , testProperty "killing spree" (monadicIO B.testKillingSpree)
+      , testProperty "cleanup" (monadicIO B.testSupCleanup)
+      , testCase "too many restarts" B.testTooManyRestarts
     ]
   ]

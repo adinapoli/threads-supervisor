@@ -73,6 +73,7 @@ test-suite threads-supervisor-tests
     Main.hs
   other-modules:
     Tests
+    Tests.Bounded
   hs-source-dirs:
     test
   default-language:
