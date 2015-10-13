@@ -1,6 +1,7 @@
-{-
-  Humble module inspired to Erlang supervisors,
-  with minimal dependencies.
+{-|
+  This module offers a `Bounded` supervisor variant,
+  where `SupervisionEvent`(s) are written on a `TBQueue`,
+  and simply discarded if the queue is full.
 -}
 
 {-# LANGUAGE GADTs #-}

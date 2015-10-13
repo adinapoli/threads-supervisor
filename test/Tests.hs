@@ -15,7 +15,7 @@ import           Control.Applicative
 import           Control.Concurrent
 import           Control.Concurrent.STM
 import           Control.Exception
-import           Control.Concurrent.Supervisor.Bounded
+import           Control.Concurrent.Supervisor
 
 --------------------------------------------------------------------------------
 type IOProperty = PropertyM IO
@@ -76,9 +76,9 @@ assertActiveThreads sup p = do
   QM.assert (p ac)
 
 --------------------------------------------------------------------------------
-qToList :: TBQueue SupervisionEvent -> IO [SupervisionEvent]
+qToList :: TQueue SupervisionEvent -> IO [SupervisionEvent]
 qToList q = do
-  nextEl <- atomically (tryReadTBQueue q)
+  nextEl <- atomically (tryReadTQueue q)
   case nextEl of
     (Just el) -> (el :) <$> qToList q
     Nothing -> return []

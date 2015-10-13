@@ -1,5 +1,5 @@
 name:                threads-supervisor
-version:             1.0.3.1
+version:             1.0.4.0
 synopsis:            Simple, IO-based library for Erlang-style thread supervision
 description:         Simple, IO-based library for Erlang-style thread supervision
 license:             MIT
@@ -49,14 +49,22 @@ executable threads-supervisor-example
     examples
   main-is:
     Main.hs
-  if flag(prof)
-    ghc-options: -fprof-auto -rtsopts
   default-language:    Haskell2010
-  ghc-options:
-    -Wall
-    -threaded
-    "-with-rtsopts=-N"
-    -funbox-strict-fields
+  if flag(prof)
+    ghc-options:
+                -Wall
+                -fprof-auto
+                -rtsopts
+                -auto-all
+                -caf-all
+                -threaded
+                "-with-rtsopts=-N -K1K"
+  else
+    ghc-options:
+        -Wall
+        -threaded
+        "-with-rtsopts=-N"
+        -funbox-strict-fields
 
 test-suite threads-supervisor-tests
   type:
