@@ -15,7 +15,7 @@ import           Control.Applicative
 import           Control.Concurrent
 import           Control.Concurrent.STM
 import           Control.Exception
-import           Control.Concurrent.Supervisor
+import           Control.Concurrent.Supervisor.Bounded
 
 --------------------------------------------------------------------------------
 type IOProperty = PropertyM IO
