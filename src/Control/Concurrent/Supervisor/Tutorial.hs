@@ -29,6 +29,9 @@ module Control.Concurrent.Supervisor.Tutorial
     -- * Creating a Supervisor
     -- $createSupervisor
 
+    -- * Bounded vs Unbounded
+    -- $boundedVsUnbounded
+
     -- * Supervising and choosing a 'RestartStrategy'
     -- $supervising
 
@@ -49,7 +52,7 @@ module Control.Concurrent.Supervisor.Tutorial
 --
 -- To mitigate this, we have a couple of libraries available,  for example
 -- <http://hackage.haskell.org/package/async> and <http://hackage.haskell.org/package/slave-thread>.
--- 
+--
 -- But what about if I do not want to take explicit action, but instead specifying upfront
 -- how to react to disaster, and leave the library work out the details?
 -- This is what this library aims to do.
@@ -101,6 +104,14 @@ module Control.Concurrent.Supervisor.Tutorial
 -- Creating a 'Supervisor' from a 'SupervisionSpec', is as simple as calling `newSupervisor`.
 -- immediately after doing so, a new thread will be started, monitoring any subsequent IO actions
 -- submitted to it.
+
+-- $boundedVsUnbounded
+-- By default, it's programmer responsibility to read the `SupervisionEvent` the library writes
+-- into its internal queue. If you do not do so, your program might leak. To mitigate this, and
+-- to offer a more granular control, two different modules are provided: a `Bounded` and an
+-- `Unbounded` one, which use, respectively, a `TBQueue` or a `TQueue` underneath. You can decide
+-- to go with the bounded version, with a queue size enforced by the library author, or pass in
+-- your own size.
 
 -- $supervising
 -- Let's wrap everything together into a full blown example:

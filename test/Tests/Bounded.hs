@@ -2,7 +2,7 @@
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-module Tests where
+module Tests.Bounded where
 
 import           Test.Tasty.HUnit as HUnit
 import           Test.Tasty.QuickCheck
@@ -15,7 +15,7 @@ import           Control.Applicative
 import           Control.Concurrent
 import           Control.Concurrent.STM
 import           Control.Exception
-import           Control.Concurrent.Supervisor
+import           Control.Concurrent.Supervisor.Bounded
 
 --------------------------------------------------------------------------------
 type IOProperty = PropertyM IO
@@ -76,9 +76,9 @@ assertActiveThreads sup p = do
   QM.assert (p ac)
 
 --------------------------------------------------------------------------------
-qToList :: TQueue SupervisionEvent -> IO [SupervisionEvent]
+qToList :: TBQueue SupervisionEvent -> IO [SupervisionEvent]
 qToList q = do
-  nextEl <- atomically (tryReadTQueue q)
+  nextEl <- atomically (tryReadTBQueue q)
   case nextEl of
     (Just el) -> (el :) <$> qToList q
     Nothing -> return []
@@ -153,7 +153,7 @@ fromAction :: Supervisor -> ThreadAction -> IO ThreadId
 fromAction s Live = forkSupervised s oneForOne (forever $ threadDelay 100000000)
 fromAction s (DieAfter (TTL ttl)) = forkSupervised s oneForOne (threadDelay ttl)
 fromAction s (ThrowAfter (TTL ttl)) = forkSupervised s oneForOne (do
-  threadDelay ttl 
+  threadDelay ttl
   throwIO $ AssertionFailed "die")
 
 --------------------------------------------------------------------------------

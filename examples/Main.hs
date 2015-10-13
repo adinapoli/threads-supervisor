@@ -47,6 +47,6 @@ main = bracketOnError (do
   return sup1) shutdownSupervisor (\_ -> threadDelay 10000000000)
   where
    go eS = do
-     newE <- atomically $ readTBQueue eS
+     newE <- atomically $ readTQueue eS
      print newE
      go eS

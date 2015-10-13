@@ -6,6 +6,12 @@ This library implement a simple, IO-based, forkIO-friendly library for Erlang-st
 
 # Changelog
 
+* 1.0.4.0
+    - Split up modules into `Types`, `Bounded` and `Supervisor`
+    - The `Bounded` module offers a `SupervisorSpec` variant which writes `SupervisionEvent` into a `TBQueue`
+    - The `Supervisor` module offers a `SupervisorSpec` variant which writes `SupervisionEvent` into a `TQueue`.
+      Programmers are expected to read from the `eventStream` queue to avoid space leaks.
+
 * 1.0.3.0
     - Added restart throttling using `RetryPolicy` from the [retry](http://hackage.haskell.org/package/retry) package.
 
@@ -19,10 +25,22 @@ Start from `Control.concurrent.Supervisor.Tutorial`. Other example can be found 
 cabal install threads-supervisor
 ```
 
+or
+
+```
+stack install threads-supervisor
+```
+
 If you have downloaded the latest master from Github:
 
 ```
 cabal install
+```
+
+or
+
+```
+stack install
 ```
 
 # Testing
@@ -30,6 +48,12 @@ cabal install
 ```
 cabal install --enable-tests
 cabal test
+```
+
+or
+
+```
+stack test
 ```
 
 # Contributions
