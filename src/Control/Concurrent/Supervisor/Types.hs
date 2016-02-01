@@ -13,6 +13,7 @@
 module Control.Concurrent.Supervisor.Types
   ( SupervisorSpec0
   , Supervisor0
+  , QueueLike(..)
   , Child_
   , DeadLetter
   , RestartAction
