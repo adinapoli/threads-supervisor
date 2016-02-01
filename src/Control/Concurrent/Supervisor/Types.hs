@@ -107,16 +107,16 @@ data SupervisionEvent =
 -- | Erlang inspired strategies. At the moment only the 'OneForOne' is
 -- implemented.
 data RestartStrategy =
-     OneForOne !Int RetryPolicy
+     OneForOne !RetryStatus (RetryPolicyM IO)
 
 instance Show RestartStrategy where
-  show (OneForOne r _) = "OneForOne (Restarted " <> show r <> " times)"
+  show (OneForOne r _) = "OneForOne (Restarted " ++ show r ++ " times)"
 
 --------------------------------------------------------------------------------
 -- | Smart constructor which offers a default throttling based on
 -- fibonacci numbers.
 oneForOne :: RestartStrategy
-oneForOne = OneForOne 0 $ fibonacciBackoff 100
+oneForOne = OneForOne defaultRetryStatus $ fibonacciBackoff 100
 
 -- $new
 -- In order to create a new supervisor, you need a `SupervisorSpec`,
@@ -207,7 +207,7 @@ forkSupervised sup@Supervisor_{..} str act =
 --------------------------------------------------------------------------------
 supervised :: QueueLike q => Supervisor0 q -> IO () -> IO ThreadId
 supervised Supervisor_{..} act = forkFinally act $ \res -> case res of
-  Left ex -> bracket myThreadId return $ \myId -> atomically $ 
+  Left ex -> bracket myThreadId return $ \myId -> atomically $
     writeTChan _sp_mailbox (DeadLetter myId ex)
   Right _ -> bracket myThreadId return $ \myId -> do
     now <- getCurrentTime
@@ -253,9 +253,11 @@ handleEvents sp@(Supervisor_ myId myChildren myMailbox myStream) = do
                   -> (RestartStrategy -> IO ())
                   -> (RestartStrategy -> IO ())
                   -> IO ()
-    applyStrategy (OneForOne currentRestarts retryPol) ifAbort ifThrottle = do
-      let newStr = OneForOne (currentRestarts + 1) retryPol
-      case getRetryPolicy retryPol (currentRestarts + 1) of
+    applyStrategy (OneForOne retryStatus retryPol) ifAbort ifThrottle = do
+      let newRetryStatus = retryStatus { rsIterNumber = rsIterNumber retryStatus + 1 }
+      let newStr = OneForOne newRetryStatus retryPol
+      maybeDelay <- getRetryPolicyM retryPol newRetryStatus
+      case maybeDelay of
         Nothing -> ifAbort newStr
         Just delay -> threadDelay delay >> ifThrottle newStr
 
