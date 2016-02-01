@@ -84,9 +84,9 @@ qToList q = do
     Nothing -> return []
 
 --------------------------------------------------------------------------------
-assertContainsNMsg :: (SupervisionEvent -> Bool) 
+assertContainsNMsg :: (SupervisionEvent -> Bool)
                    -> Int
-                   -> [SupervisionEvent] 
+                   -> [SupervisionEvent]
                    -> IO ()
 assertContainsNMsg _ 0 _ = HUnit.assertBool "" True
 assertContainsNMsg _ x [] = do
@@ -120,7 +120,7 @@ assertContainsNLimitReached = assertContainsNMsg matches
 assertContainsRestartMsg :: [SupervisionEvent] -> ThreadId -> IOProperty ()
 assertContainsRestartMsg [] _ = QM.assert False
 assertContainsRestartMsg (x:xs) tid = case x of
-  ((ChildRestarted old _ _ _)) -> 
+  ((ChildRestarted old _ _ _)) ->
     if old == tid then QM.assert True else assertContainsRestartMsg xs tid
   _ -> assertContainsRestartMsg xs tid
 
@@ -153,7 +153,7 @@ fromAction :: Supervisor -> ThreadAction -> IO ThreadId
 fromAction s Live = forkSupervised s oneForOne (forever $ threadDelay 100000000)
 fromAction s (DieAfter (TTL ttl)) = forkSupervised s oneForOne (threadDelay ttl)
 fromAction s (ThrowAfter (TTL ttl)) = forkSupervised s oneForOne (do
-  threadDelay ttl 
+  threadDelay ttl
   throwIO $ AssertionFailed "die")
 
 --------------------------------------------------------------------------------
@@ -200,7 +200,7 @@ testTooManyRestarts :: Assertion
 testTooManyRestarts = do
   supSpec <- newSupervisorSpec
   sup <- newSupervisor supSpec
-  _ <- forkSupervised sup (OneForOne 0 $ limitRetries 5) $ error "die"
+  _ <- forkSupervised sup (OneForOne defaultRetryStatus $ limitRetries 5) $ error "die"
   threadDelay 2000000
   q <- qToList (eventStream sup)
   assertContainsNLimitReached 1 q
