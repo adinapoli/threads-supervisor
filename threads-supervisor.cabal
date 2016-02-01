@@ -1,5 +1,5 @@
 name:                threads-supervisor
-version:             1.0.4.0
+version:             1.0.4.1
 synopsis:            Simple, IO-based library for Erlang-style thread supervision
 description:         Simple, IO-based library for Erlang-style thread supervision
 license:             MIT

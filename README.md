@@ -6,6 +6,9 @@ This library implement a simple, IO-based, forkIO-friendly library for Erlang-st
 
 # Changelog
 
+* 1.0.4.1
+    - Export QueueLike (https://github.com/adinapoli/threads-supervisor/pull/8)
+
 * 1.0.4.0
     - Split up modules into `Types`, `Bounded` and `Supervisor`
     - The `Bounded` module offers a `SupervisorSpec` variant which writes `SupervisionEvent` into a `TBQueue`
@@ -60,3 +63,8 @@ stack test
 This library scratches my own itches, but please fork away!
 Pull requests are encouraged to implement the part of the API
 you need.
+
+## Contributors
+
+- Alfredo Di Napoli (initial author)
+- Sam Rijs (@srijs)
