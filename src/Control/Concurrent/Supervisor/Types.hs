@@ -255,11 +255,15 @@ handleEvents sp@(Supervisor_ myId myStrategy myChildren myMailbox myStream) = do
                   -> IO ()
     applyStrategy rState rPolicy ifAbort ifThrottle = case myStrategy of
       OneForOne -> do
-        let newRState = rState { rsIterNumber = rsIterNumber rState + 1 }
-        maybeDelay <- getRetryPolicyM rPolicy newRState
+        maybeDelay <- getRetryPolicyM rPolicy rState
         case maybeDelay of
-          Nothing -> ifAbort newRState
-          Just delay -> threadDelay delay >> ifThrottle newRState
+          Nothing -> ifAbort rState
+          Just delay ->
+            let newRState = rState { rsIterNumber = rsIterNumber rState + 1
+                                   , rsCumulativeDelay = rsCumulativeDelay rState + delay
+                                   , rsPreviousDelay = Just (maybe 0 (const delay) (rsPreviousDelay rState))
+                                   }
+            in threadDelay delay >> ifThrottle newRState
 
 -- $monitor
 
