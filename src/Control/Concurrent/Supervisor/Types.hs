@@ -25,8 +25,8 @@ module Control.Concurrent.Supervisor.Types
   -- * Creating a new supervisor
   -- $sup
   , newSupervisor
-  -- * Restart Strategies
-  , oneForOne
+  -- * Restart Policies
+  , fibonacciRetryPolicy
   -- * Stopping a supervisor
   -- $shutdown
   , shutdownSupervisor
@@ -59,6 +59,7 @@ data Initialised
 --------------------------------------------------------------------------------
 data Supervisor_ q a = Supervisor_ {
         _sp_myTid    :: !(Maybe ThreadId)
+      , _sp_strategy :: !RestartStrategy
       , _sp_children :: !(IORef (Map.HashMap ThreadId (Child_ q)))
       , _sp_mailbox :: TChan DeadLetter
       , _sp_eventStream :: q SupervisionEvent
@@ -88,8 +89,8 @@ instance QueueLike TBQueue where
 data DeadLetter = DeadLetter ThreadId SomeException
 
 --------------------------------------------------------------------------------
-data Child_ q = Worker !RestartStrategy RestartAction
-              | Supvsr !RestartStrategy !(Supervisor_ q Initialised)
+data Child_ q = Worker !RetryStatus (RetryPolicyM IO) RestartAction
+              | Supvsr !RetryStatus (RetryPolicyM IO) !(Supervisor_ q Initialised)
 
 --------------------------------------------------------------------------------
 type RestartAction = ThreadId -> IO ThreadId
@@ -98,25 +99,22 @@ type RestartAction = ThreadId -> IO ThreadId
 data SupervisionEvent =
      ChildBorn !ThreadId !UTCTime
    | ChildDied !ThreadId !SomeException !UTCTime
-   | ChildRestarted !ThreadId !ThreadId !RestartStrategy !UTCTime
-   | ChildRestartLimitReached !ThreadId !RestartStrategy !UTCTime
+   | ChildRestarted !ThreadId !ThreadId !RetryStatus !UTCTime
+   | ChildRestartLimitReached !ThreadId !RetryStatus !UTCTime
    | ChildFinished !ThreadId !UTCTime
    deriving Show
 
 --------------------------------------------------------------------------------
 -- | Erlang inspired strategies. At the moment only the 'OneForOne' is
 -- implemented.
-data RestartStrategy =
-     OneForOne !RetryStatus (RetryPolicyM IO)
-
-instance Show RestartStrategy where
-  show (OneForOne r _) = "OneForOne (Restarted " ++ show r ++ " times)"
+data RestartStrategy = OneForOne
+  deriving Show
 
 --------------------------------------------------------------------------------
 -- | Smart constructor which offers a default throttling based on
 -- fibonacci numbers.
-oneForOne :: RestartStrategy
-oneForOne = OneForOne defaultRetryStatus $ fibonacciBackoff 100
+fibonacciRetryPolicy :: RetryPolicyM IO
+fibonacciRetryPolicy = fibonacciBackoff 100
 
 -- $new
 -- In order to create a new supervisor, you need a `SupervisorSpec`,
@@ -127,12 +125,12 @@ oneForOne = OneForOne defaultRetryStatus $ fibonacciBackoff 100
 -- | Creates a new 'SupervisorSpec'. The reason it doesn't return a
 -- 'Supervisor' is to force you to call 'supervise' explicitly, in order to start the
 -- supervisor thread.
-newSupervisorSpec :: QueueLike q => Int -> IO (SupervisorSpec0 q)
-newSupervisorSpec size = do
+newSupervisorSpec :: QueueLike q => RestartStrategy -> Int -> IO (SupervisorSpec0 q)
+newSupervisorSpec strategy size = do
   tkn <- newTChanIO
   evt <- newQueueIO size
   ref <- newIORef Map.empty
-  return $ Supervisor_ Nothing ref tkn evt
+  return $ Supervisor_ Nothing strategy ref tkn evt
 
 -- $supervise
 
@@ -142,6 +140,7 @@ newSupervisor spec = forkIO (handleEvents spec) >>= \tid -> do
   mbx <- atomically $ dupTChan (_sp_mailbox spec)
   return Supervisor_ {
     _sp_myTid = Just tid
+  , _sp_strategy = _sp_strategy spec
   , _sp_mailbox = mbx
   , _sp_children = _sp_children spec
   , _sp_eventStream = _sp_eventStream spec
@@ -154,12 +153,12 @@ newSupervisor spec = forkIO (handleEvents spec) >>= \tid -> do
 -- to react. It's using a bounded queue to explicitly avoid memory leaks in case
 -- you do not want to drain the queue to listen to incoming events.
 eventStream :: QueueLike q => Supervisor0 q -> q SupervisionEvent
-eventStream (Supervisor_ _ _ _ e) = e
+eventStream (Supervisor_ _ _ _ _ e) = e
 
 --------------------------------------------------------------------------------
 -- | Returns the number of active threads at a given moment in time.
 activeChildren :: QueueLike q => Supervisor0 q -> IO Int
-activeChildren (Supervisor_ _ chRef _ _) = do
+activeChildren (Supervisor_ _ _ chRef _ _) = do
   readIORef chRef >>= return . length . Map.keys
 
 -- $shutdown
@@ -169,7 +168,7 @@ activeChildren (Supervisor_ _ chRef _ _) = do
 -- be killed as well. To do so, we explore the children tree, killing workers as we go,
 -- and recursively calling `shutdownSupervisor` in case we hit a monitored `Supervisor`.
 shutdownSupervisor :: QueueLike q => Supervisor0 q -> IO ()
-shutdownSupervisor (Supervisor_ sId chRef _ _) = do
+shutdownSupervisor (Supervisor_ sId _ chRef _ _) = do
   case sId of
     Nothing -> return ()
     Just tid -> do
@@ -180,8 +179,8 @@ shutdownSupervisor (Supervisor_ sId chRef _ _) = do
     processChildren [] = return ()
     processChildren (x:xs) = do
       case x of
-        (tid, Worker _ _) -> killThread tid
-        (_, Supvsr _ s) -> shutdownSupervisor s
+        (tid, Worker _ _ _) -> killThread tid
+        (_, Supvsr _ _ s) -> shutdownSupervisor s
       processChildren xs
 
 -- $fork
@@ -191,14 +190,14 @@ shutdownSupervisor (Supervisor_ sId chRef _ _) = do
 forkSupervised :: QueueLike q
                => Supervisor0 q
                -- ^ The 'Supervisor'
-               -> RestartStrategy
-               -- ^ The 'RestartStrategy' to use
+               -> RetryPolicyM IO
+               -- ^ The retry policy to use
                -> IO ()
                -- ^ The computation to run
                -> IO ThreadId
-forkSupervised sup@Supervisor_{..} str act =
+forkSupervised sup@Supervisor_{..} policy act =
   bracket (supervised sup act) return $ \newChild -> do
-    let ch = Worker str (const (supervised sup act))
+    let ch = Worker defaultRetryStatus policy (const (supervised sup act))
     atomicModifyIORef' _sp_children $ \chMap -> (Map.insert newChild ch chMap, ())
     now <- getCurrentTime
     atomically $ writeQueue _sp_eventStream (ChildBorn newChild now)
@@ -216,7 +215,7 @@ supervised Supervisor_{..} act = forkFinally act $ \res -> case res of
 
 --------------------------------------------------------------------------------
 handleEvents :: QueueLike q => SupervisorSpec0 q -> IO ()
-handleEvents sp@(Supervisor_ myId myChildren myMailbox myStream) = do
+handleEvents sp@(Supervisor_ myId myStrategy myChildren myMailbox myStream) = do
   (DeadLetter newDeath ex) <- atomically $ readTChan myMailbox
   now <- getCurrentTime
   atomically $ writeQueue myStream (ChildDied newDeath ex now)
@@ -230,36 +229,37 @@ handleEvents sp@(Supervisor_ myId myChildren myMailbox myStream) = do
      chMap <- readIORef myChildren
      case Map.lookup newDeath chMap of
        Nothing -> return ()
-       Just (Worker str act) ->
-         applyStrategy str (\newStr -> do
+       Just (Worker rState rPolicy act) ->
+         applyStrategy rState rPolicy (\newRState -> do
                                 atomically $
-                                  writeQueue myStream (ChildRestartLimitReached newDeath newStr now)) $ \newStr -> do
-           let ch = Worker newStr act
+                                  writeQueue myStream (ChildRestartLimitReached newDeath newRState now)) $ \newRState -> do
+           let ch = Worker newRState rPolicy act
            newThreadId <- act newDeath
            writeIORef myChildren (Map.insert newThreadId ch $! Map.delete newDeath chMap)
-           atomically $ writeQueue myStream (ChildRestarted newDeath newThreadId newStr now)
-       Just (Supvsr str s@(Supervisor_ _ mbx cld es)) ->
-         applyStrategy str (\newStr -> do
+           atomically $ writeQueue myStream (ChildRestarted newDeath newThreadId newRState now)
+       Just (Supvsr rState rPolicy s@(Supervisor_ _ str mbx cld es)) ->
+         applyStrategy rState rPolicy (\newRState -> do
                                 atomically $
-                                  writeQueue myStream (ChildRestartLimitReached newDeath newStr now)) $ \newStr -> do
-           let node = Supervisor_ myId myChildren myMailbox myStream
-           let ch = (Supvsr newStr s)
-           newThreadId <- supervised node (handleEvents $ Supervisor_ Nothing mbx cld es)
+                                  writeQueue myStream (ChildRestartLimitReached newDeath newRState now)) $ \newRState -> do
+           let node = Supervisor_ myId myStrategy myChildren myMailbox myStream
+           let ch = (Supvsr newRState rPolicy s)
+           newThreadId <- supervised node (handleEvents $ Supervisor_ Nothing str mbx cld es)
            writeIORef myChildren (Map.insert newThreadId ch $! Map.delete newDeath chMap)
-           atomically $ writeQueue myStream (ChildRestarted newDeath newThreadId newStr now)
+           atomically $ writeQueue myStream (ChildRestarted newDeath newThreadId newRState now)
      handleEvents sp
   where
-    applyStrategy :: RestartStrategy
-                  -> (RestartStrategy -> IO ())
-                  -> (RestartStrategy -> IO ())
+    applyStrategy :: RetryStatus
+                  -> RetryPolicyM IO
+                  -> (RetryStatus -> IO ())
+                  -> (RetryStatus -> IO ())
                   -> IO ()
-    applyStrategy (OneForOne retryStatus retryPol) ifAbort ifThrottle = do
-      let newRetryStatus = retryStatus { rsIterNumber = rsIterNumber retryStatus + 1 }
-      let newStr = OneForOne newRetryStatus retryPol
-      maybeDelay <- getRetryPolicyM retryPol newRetryStatus
-      case maybeDelay of
-        Nothing -> ifAbort newStr
-        Just delay -> threadDelay delay >> ifThrottle newStr
+    applyStrategy rState rPolicy ifAbort ifThrottle = case myStrategy of
+      OneForOne -> do
+        let newRState = rState { rsIterNumber = rsIterNumber rState + 1 }
+        maybeDelay <- getRetryPolicyM rPolicy newRState
+        case maybeDelay of
+          Nothing -> ifAbort newRState
+          Just delay -> threadDelay delay >> ifThrottle newRState
 
 -- $monitor
 
@@ -273,7 +273,7 @@ instance Exception MonitorRequest
 -- Thanks to the fact that for the supervisor the restart means we just copy over
 -- its internal state, it should be perfectly fine to do so.
 monitor :: QueueLike q => Supervisor0 q -> Supervisor0 q -> IO ()
-monitor (Supervisor_ _ _ mbox _) (Supervisor_ mbId _ _ _) = do
+monitor (Supervisor_ _ _ _ mbox _) (Supervisor_ mbId _ _ _ _) = do
   case mbId of
     Nothing -> return ()
     Just tid -> atomically $
