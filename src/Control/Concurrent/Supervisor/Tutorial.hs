@@ -118,18 +118,18 @@ module Control.Concurrent.Supervisor.Tutorial
 --
 -- > main :: IO ()
 -- > main = bracketOnError (do
--- >   supSpec <- newSupervisorSpec
+-- >   supSpec <- newSupervisorSpec OneForOne
 -- >
 -- >   sup1 <- newSupervisor supSpec
 -- >   sup2 <- newSupervisor supSpec
 -- >
 -- >   sup1 `monitor` sup2
 -- >
--- >   _ <- forkSupervised sup2 oneForOne job3
+-- >   _ <- forkSupervised sup2 fibonacciRetryPolicy job3
 -- >
--- >   j1 <- forkSupervised sup1 oneForOne job1
--- >   _ <- forkSupervised sup1 oneForOne (job2 j1)
--- >   _ <- forkSupervised sup1 oneForOne job4
+-- >   j1 <- forkSupervised sup1 fibonacciRetryPolicy job1
+-- >   _ <- forkSupervised sup1 fibonacciRetryPolicy (job2 j1)
+-- >   _ <- forkSupervised sup1 fibonacciRetryPolicy job4
 -- >   _ <- forkIO (go (eventStream sup1))
 -- >   return sup1) shutdownSupervisor (\_ -> threadDelay 10000000000)
 -- >   where
@@ -147,10 +147,10 @@ module Control.Concurrent.Supervisor.Tutorial
 -- (from the same spec, but you can create a separate one as well)
 -- and we ask the first supervisor to monitor the second one.
 --
--- `oneForOne` is a smart constructor for our `RestartStrategy`,which creates
--- under the hood a `OneForOne`  strategy which is using the `fibonacciBackoff`
--- as `RetryPolicy` from the "retry" package. The clear advantage is that
--- you are not obliged to use it if you don't like this sensible default;
+-- `fibonacciRetryPolicy` is a constructor for the `RetryPolicy`, which creates
+-- under the hood a `RetryPolicy` from the "retry" package which is using
+-- the `fibonacciBackoff`. The clear advantage is that you are not obliged to use
+-- it if you don't like this sensible default;
 -- `RetryPolicy` is an monoid, so you can compose retry policies as you wish.
 --
 -- The `RetryPolicy` will also be responsible for determining whether a thread can be
