@@ -11,7 +11,6 @@ import qualified Data.List as List
 import           Control.Monad
 import           Control.Retry
 import           Control.Monad.Trans.Class
-import           Control.Applicative
 import           Control.Concurrent
 import           Control.Concurrent.STM
 import           Control.Exception
@@ -128,18 +127,18 @@ assertContainsRestartMsg (x:xs) tid = case x of
 -- Control.Concurrent.Supervisor tests
 test1SupThreadNoEx :: IOProperty ()
 test1SupThreadNoEx = forAllM randomLiveTime $ \ttl -> do
-  supSpec <- lift newSupervisorSpec
+  supSpec <- lift $ newSupervisorSpec OneForOne
   sup <- lift $ newSupervisor supSpec
-  _ <- lift (forkSupervised sup oneForOne (forever $ threadDelay ttl))
+  _ <- lift (forkSupervised sup fibonacciRetryPolicy (forever $ threadDelay ttl))
   assertActiveThreads sup (== 1)
   lift $ shutdownSupervisor sup
 
 --------------------------------------------------------------------------------
 test1SupThreadPrematureDemise :: IOProperty ()
 test1SupThreadPrematureDemise = forAllM randomLiveTime $ \ttl -> do
-  supSpec <- lift newSupervisorSpec
+  supSpec <- lift $ newSupervisorSpec OneForOne
   sup <- lift $ newSupervisor supSpec
-  tid <- lift (forkSupervised sup oneForOne (forever $ threadDelay ttl))
+  tid <- lift (forkSupervised sup fibonacciRetryPolicy (forever $ threadDelay ttl))
   lift $ do
     throwTo tid (AssertionFailed "You must die")
     threadDelay ttl --give time to restart the thread
@@ -150,9 +149,9 @@ test1SupThreadPrematureDemise = forAllM randomLiveTime $ \ttl -> do
 
 --------------------------------------------------------------------------------
 fromAction :: Supervisor -> ThreadAction -> IO ThreadId
-fromAction s Live = forkSupervised s oneForOne (forever $ threadDelay 100000000)
-fromAction s (DieAfter (TTL ttl)) = forkSupervised s oneForOne (threadDelay ttl)
-fromAction s (ThrowAfter (TTL ttl)) = forkSupervised s oneForOne (do
+fromAction s Live = forkSupervised s fibonacciRetryPolicy (forever $ threadDelay 100000000)
+fromAction s (DieAfter (TTL ttl)) = forkSupervised s fibonacciRetryPolicy (threadDelay ttl)
+fromAction s (ThrowAfter (TTL ttl)) = forkSupervised s fibonacciRetryPolicy (do
   threadDelay ttl
   throwIO $ AssertionFailed "die")
 
@@ -172,7 +171,7 @@ maxWait ta = go ta []
 -- the side effects strikes.
 testKillingSpree :: IOProperty ()
 testKillingSpree = forAllM arbitrary $ \ep@(ExecutionPlan _ acts) -> do
-  supSpec <- lift newSupervisorSpec
+  supSpec <- lift $ newSupervisorSpec OneForOne
   sup <- lift $ newSupervisor supSpec
   _ <- forM acts $ lift . fromAction sup
   lift (threadDelay $ maxWait acts * 2)
@@ -187,7 +186,7 @@ testKillingSpree = forAllM arbitrary $ \ep@(ExecutionPlan _ acts) -> do
 testSupCleanup :: IOProperty ()
 testSupCleanup = forAllM (vectorOf 100 arbitrary) $ \ttls -> do
   let acts = map DieAfter ttls
-  supSpec <- lift newSupervisorSpec
+  supSpec <- lift $ newSupervisorSpec OneForOne
   sup <- lift $ newSupervisor supSpec
   _ <- forM acts $ lift . fromAction sup
   lift (threadDelay $ maxWait acts * 2)
@@ -198,9 +197,9 @@ testSupCleanup = forAllM (vectorOf 100 arbitrary) $ \ttls -> do
 
 testTooManyRestarts :: Assertion
 testTooManyRestarts = do
-  supSpec <- newSupervisorSpec
+  supSpec <- newSupervisorSpec OneForOne
   sup <- newSupervisor supSpec
-  _ <- forkSupervised sup (OneForOne defaultRetryStatus $ limitRetries 5) $ error "die"
+  _ <- forkSupervised sup (limitRetries 5) $ error "die"
   threadDelay 2000000
   q <- qToList (eventStream sup)
   assertContainsNLimitReached 1 q

@@ -30,19 +30,19 @@ job5 = threadDelay 100 >> error "dead"
 
 main :: IO ()
 main = bracketOnError (do
-  supSpec <- newSupervisorSpec
+  supSpec <- newSupervisorSpec OneForOne
 
   sup1 <- newSupervisor supSpec
   sup2 <- newSupervisor supSpec
 
   sup1 `monitor` sup2
 
-  _ <- forkSupervised sup2 oneForOne job3
+  _ <- forkSupervised sup2 fibonacciRetryPolicy job3
 
-  j1 <- forkSupervised sup1 oneForOne job1
-  _ <- forkSupervised sup1 oneForOne (job2 j1)
-  _ <- forkSupervised sup1 oneForOne job4
-  _ <- forkSupervised sup1 oneForOne job5
+  j1 <- forkSupervised sup1 fibonacciRetryPolicy job1
+  _ <- forkSupervised sup1 fibonacciRetryPolicy (job2 j1)
+  _ <- forkSupervised sup1 fibonacciRetryPolicy job4
+  _ <- forkSupervised sup1 fibonacciRetryPolicy job5
   _ <- forkIO (go (eventStream sup1))
   return sup1) shutdownSupervisor (\_ -> threadDelay 10000000000)
   where

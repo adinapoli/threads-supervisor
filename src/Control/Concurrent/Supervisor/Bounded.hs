@@ -35,13 +35,13 @@ type Child = Types.Child_ TBQueue
 -- | Creates a new 'SupervisorSpec'. The reason it doesn't return a
 -- 'Supervisor' is to force you to call 'supervise' explicitly, in order to start the
 -- supervisor thread.
-newSupervisorSpec :: IO SupervisorSpec
-newSupervisorSpec = Types.newSupervisorSpec defaultEventQueueSize
+newSupervisorSpec :: Types.RestartStrategy -> IO SupervisorSpec
+newSupervisorSpec strategy = Types.newSupervisorSpec strategy defaultEventQueueSize
 
 --------------------------------------------------------------------------------
 -- | Like 'newSupervisorSpec', but give the user control over the size of the
 -- event queue.
-newSupervisorSpecBounded :: Int -> IO SupervisorSpec
+newSupervisorSpecBounded :: Types.RestartStrategy -> Int -> IO SupervisorSpec
 newSupervisorSpecBounded = Types.newSupervisorSpec
 
 --------------------------------------------------------------------------------
