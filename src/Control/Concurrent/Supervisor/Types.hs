@@ -213,9 +213,52 @@ supervised Supervisor_{..} act = forkFinally act $ \res -> case res of
     atomicModifyIORef' _sp_children $ \chMap -> (Map.delete myId chMap, ())
     atomically $ writeQueue _sp_eventStream (ChildFinished myId now)
 
+restartChild :: QueueLike q => SupervisorSpec0 q -> UTCTime -> ThreadId -> IO Bool
+restartChild (Supervisor_ myId myStrategy myChildren myMailbox myStream) now newDeath = do
+  chMap <- readIORef myChildren
+  case Map.lookup newDeath chMap of
+    Nothing -> return False
+    Just (Worker rState rPolicy act) ->
+      runRetryPolicy rState rPolicy emitEventChildRestartLimitReached $ \newRState -> do
+        let ch = Worker newRState rPolicy act
+        newThreadId <- act newDeath
+        writeIORef myChildren (Map.insert newThreadId ch $! Map.delete newDeath chMap)
+        emitEventChildRestarted newThreadId newRState
+    Just (Supvsr rState rPolicy s@(Supervisor_ _ str mbx cld es)) ->
+      runRetryPolicy rState rPolicy emitEventChildRestartLimitReached $ \newRState -> do
+        let node = Supervisor_ myId myStrategy myChildren myMailbox myStream
+        let ch = (Supvsr newRState rPolicy s)
+        -- TODO: shutdown children?
+        newThreadId <- supervised node (handleEvents $ Supervisor_ Nothing str mbx cld es)
+        writeIORef myChildren (Map.insert newThreadId ch $! Map.delete newDeath chMap)
+        emitEventChildRestarted newThreadId newRState
+  where
+    emitEventChildRestarted newThreadId newRState = atomically $
+      writeQueue myStream (ChildRestarted newDeath newThreadId newRState now)
+    emitEventChildRestartLimitReached newRState = atomically $
+      writeQueue myStream (ChildRestartLimitReached newDeath newRState now)
+    runRetryPolicy :: RetryStatus
+                 -> RetryPolicyM IO
+                 -> (RetryStatus -> IO ())
+                 -> (RetryStatus -> IO ())
+                 -> IO Bool
+    runRetryPolicy rState rPolicy ifAbort ifThrottle = do
+     maybeDelay <- getRetryPolicyM rPolicy rState
+     case maybeDelay of
+       Nothing -> ifAbort rState >> return False
+       Just delay ->
+         let newRState = rState { rsIterNumber = rsIterNumber rState + 1
+                                , rsCumulativeDelay = rsCumulativeDelay rState + delay
+                                , rsPreviousDelay = Just (maybe 0 (const delay) (rsPreviousDelay rState))
+                                }
+         in threadDelay delay >> ifThrottle newRState >> return True
+
+restartOneForOne :: QueueLike q => SupervisorSpec0 q -> UTCTime -> ThreadId -> IO Bool
+restartOneForOne sup now newDeath = restartChild sup now newDeath
+
 --------------------------------------------------------------------------------
 handleEvents :: QueueLike q => SupervisorSpec0 q -> IO ()
-handleEvents sp@(Supervisor_ myId myStrategy myChildren myMailbox myStream) = do
+handleEvents sup@(Supervisor_ _ myStrategy _ myMailbox myStream) = do
   (DeadLetter newDeath ex) <- atomically $ readTChan myMailbox
   now <- getCurrentTime
   atomically $ writeQueue myStream (ChildDied newDeath ex now)
@@ -224,46 +267,14 @@ handleEvents sp@(Supervisor_ myId myStrategy myChildren myMailbox myStream) = do
   -- Note to the skeptical: It's perfectly fine do put `undefined` here,
   -- as `typeOf` does not inspect the content (try in GHCi!)
   case typeOf ex == (typeOf (undefined :: AsyncException)) of
-    True -> handleEvents sp
+    True -> handleEvents sup
     False -> do
-     chMap <- readIORef myChildren
-     case Map.lookup newDeath chMap of
-       Nothing -> return ()
-       Just (Worker rState rPolicy act) ->
-         applyStrategy rState rPolicy (\newRState -> do
-                                atomically $
-                                  writeQueue myStream (ChildRestartLimitReached newDeath newRState now)) $ \newRState -> do
-           let ch = Worker newRState rPolicy act
-           newThreadId <- act newDeath
-           writeIORef myChildren (Map.insert newThreadId ch $! Map.delete newDeath chMap)
-           atomically $ writeQueue myStream (ChildRestarted newDeath newThreadId newRState now)
-       Just (Supvsr rState rPolicy s@(Supervisor_ _ str mbx cld es)) ->
-         applyStrategy rState rPolicy (\newRState -> do
-                                atomically $
-                                  writeQueue myStream (ChildRestartLimitReached newDeath newRState now)) $ \newRState -> do
-           let node = Supervisor_ myId myStrategy myChildren myMailbox myStream
-           let ch = (Supvsr newRState rPolicy s)
-           newThreadId <- supervised node (handleEvents $ Supervisor_ Nothing str mbx cld es)
-           writeIORef myChildren (Map.insert newThreadId ch $! Map.delete newDeath chMap)
-           atomically $ writeQueue myStream (ChildRestarted newDeath newThreadId newRState now)
-     handleEvents sp
-  where
-    applyStrategy :: RetryStatus
-                  -> RetryPolicyM IO
-                  -> (RetryStatus -> IO ())
-                  -> (RetryStatus -> IO ())
-                  -> IO ()
-    applyStrategy rState rPolicy ifAbort ifThrottle = case myStrategy of
-      OneForOne -> do
-        maybeDelay <- getRetryPolicyM rPolicy rState
-        case maybeDelay of
-          Nothing -> ifAbort rState
-          Just delay ->
-            let newRState = rState { rsIterNumber = rsIterNumber rState + 1
-                                   , rsCumulativeDelay = rsCumulativeDelay rState + delay
-                                   , rsPreviousDelay = Just (maybe 0 (const delay) (rsPreviousDelay rState))
-                                   }
-            in threadDelay delay >> ifThrottle newRState
+      successful <- case myStrategy of
+        OneForOne -> restartOneForOne sup now newDeath
+      unless successful $ do
+        -- TODO: shutdown supervisor?
+        return ()
+      handleEvents sup
 
 -- $monitor
 
