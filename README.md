@@ -6,6 +6,9 @@ This library implement a simple, IO-based, forkIO-friendly library for Erlang-st
 
 # Changelog
 
+* 1.1.0.0
+    - (**Breaking Change**) Support lts-5.1 and retry-0.7 (https://github.com/adinapoli/threads-supervisor/pull/9)
+
 * 1.0.4.1
     - Export QueueLike (https://github.com/adinapoli/threads-supervisor/pull/8)
 
