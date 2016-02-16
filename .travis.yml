@@ -2,6 +2,8 @@ language: haskell
 
 sudo: false
 
+env:
+  - GHCVER=7.10.2 STACK_YAML=stack.yaml
 
 notifications:
   email: false
@@ -13,12 +15,16 @@ cache:
 before_install:
   - mkdir -p ~/.local/bin
   - export PATH=~/.local/bin:$PATH
-  - travis_retry curl -L https://github.com/commercialhaskell/stack/releases/download/v0.1.5.0/stack-0.1.5.0-x86_64-linux.tar.gz | tar xz --strip-components=1 -C ~/.local/bin
+  - travis_retry curl -L https://github.com/commercialhaskell/stack/releases/download/v1.0.2/stack-1.0.2-linux-x86_64.tar.gz | tar xz --strip-components=1 -C ~/.local/bin
   - chmod a+x ~/.local/bin/stack
 
 install:
- - stack setup --no-terminal
- - stack build --only-snapshot --no-terminal
+  - stack setup --no-terminal
+  - stack build --only-snapshot --no-terminal
 
 script:
- - stack --no-terminal test
+  - stack --no-terminal test --coverage
+
+after_script:
+  - travis_retry curl -L https://github.com/rubik/stack-hpc-coveralls/releases/download/v0.0.3.0/shc-linux-x64-$GHCVER.tar.bz2 | tar -xj
+  - ./shc threads-supervisor threads-supervisor-tests
