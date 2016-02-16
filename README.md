@@ -1,8 +1,29 @@
-[![Build Status](https://travis-ci.org/adinapoli/threads-supervisor.svg?branch=master)](https://travis-ci.org/adinapoli/threads-supervisor)
+<h1 align="center">
+    <a href="https://github.com/adinapoli/threads-supervisor">
+        Threads Supervisor
+    </a>
+</h1>
 
-# Threads-Supervisor
+<p align="center">
+    <a href="https://travis-ci.org/adinapoli/threads-supervisor">
+        <img alt="Tests"
+             src="https://img.shields.io/travis/adinapoli/threads-supervisor.svg?style=flat-square">
+    </a>
+    <a href="https://coveralls.io/github/adinapoli/threads-supervisor">
+        <img alt="Code coverage"
+             src="https://img.shields.io/coveralls/adinapoli/threads-supervisor.svg?style=flat-square">
+    </a>
+    <a href="https://hackage.haskell.org/package/threads-supervisor">
+        <img alt="Version"
+             src="https://img.shields.io/hackage/v/threads-supervisor.svg?label=version&amp;style=flat-square">
+    </a>
+</p>
 
-This library implement a simple, IO-based, forkIO-friendly library for Erlang-style thread supervision.
+<p align="center">
+    Simple, IO-based, forkIO-friendly threads supervision library.
+</p>
+
+<hr>
 
 # Changelog
 
