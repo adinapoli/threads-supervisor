@@ -9,9 +9,8 @@
         <img alt="Tests"
              src="https://img.shields.io/travis/adinapoli/threads-supervisor.svg?style=flat-square">
     </a>
-    <a href="https://coveralls.io/github/adinapoli/threads-supervisor">
-        <img alt="Code coverage"
-             src="https://img.shields.io/coveralls/adinapoli/threads-supervisor.svg?style=flat-square">
+    <a href='https://coveralls.io/github/adinapoli/threads-supervisor?branch=master'>
+      <img src='https://coveralls.io/repos/github/adinapoli/threads-supervisor/badge.svg?branch=master' alt='Coverage Status' />
     </a>
     <a href="https://hackage.haskell.org/package/threads-supervisor">
         <img alt="Version"
