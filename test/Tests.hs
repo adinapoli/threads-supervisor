@@ -14,7 +14,7 @@ import           Control.Monad.Trans.Class
 import           Control.Concurrent
 import           Control.Concurrent.STM
 import           Control.Exception
-import           Control.Concurrent.Supervisor
+import           Control.Concurrent.Supervisor as Supervisor
 
 --------------------------------------------------------------------------------
 type IOProperty = PropertyM IO
@@ -146,6 +146,22 @@ test1SupThreadPrematureDemise = forAllM randomLiveTime $ \ttl -> do
   q <- lift $ qToList (eventStream sup)
   assertContainsNRestartMsg 1 q
   lift $ shutdownSupervisor sup
+
+--------------------------------------------------------------------------------
+test1SupSpvrPrematureDemise :: IOProperty ()
+test1SupSpvrPrematureDemise = forAllM randomLiveTime $ \ttl -> do
+  supSpec <- lift $ newSupervisorSpec OneForOne
+  sup1 <- lift $ newSupervisor supSpec
+  sup2 <- lift $ newSupervisor supSpec
+  tid <- lift  $ sup1 `Supervisor.monitor` sup2
+  lift $ do
+    throwTo tid (AssertionFailed "You must die")
+    threadDelay ttl --give time to restart the thread
+  assertActiveThreads sup1 (== 1)
+  q <- lift $ qToList (eventStream sup1)
+  assertContainsNRestartMsg 1 q
+  lift $ shutdownSupervisor sup1
+  -- TODO: Assert sup2 has been shutdown as result.
 
 --------------------------------------------------------------------------------
 fromAction :: Supervisor -> ThreadAction -> IO ThreadId

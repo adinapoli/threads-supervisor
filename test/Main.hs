@@ -26,6 +26,7 @@ allTests = testGroup "All Tests" [
     withQuickCheckDepth "Control.Concurrent.Supervisor" 20 [
         testProperty "1 supervised thread, no exceptions" (monadicIO test1SupThreadNoEx)
       , testProperty "1 supervised thread, premature exception" (monadicIO test1SupThreadPrematureDemise)
+      , testProperty "1 supervised supervisor, premature exception" (monadicIO test1SupSpvrPrematureDemise)
       , testProperty "killing spree" (monadicIO testKillingSpree)
       , testProperty "cleanup" (monadicIO testSupCleanup)
       , testCase "too many restarts" testTooManyRestarts

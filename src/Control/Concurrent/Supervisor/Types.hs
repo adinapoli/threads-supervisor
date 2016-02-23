@@ -42,15 +42,16 @@ module Control.Concurrent.Supervisor.Types
   , monitor
   ) where
 
-import qualified Data.HashMap.Strict as Map
 import           Control.Concurrent
 import           Control.Concurrent.STM
-import           Data.IORef
 import           Control.Exception
-import           Data.Typeable
 import           Control.Monad
 import           Control.Retry
+import           Data.Functor.Identity
+import qualified Data.HashMap.Strict as Map
+import           Data.IORef
 import           Data.Time
+import           Data.Typeable
 
 --------------------------------------------------------------------------------
 data Uninitialised
@@ -58,12 +59,16 @@ data Initialised
 
 --------------------------------------------------------------------------------
 data Supervisor_ q a = Supervisor_ {
-        _sp_myTid    :: !(Maybe ThreadId)
+        _sp_myTid    :: !(SupervisorId a ThreadId)
       , _sp_strategy :: !RestartStrategy
       , _sp_children :: !(IORef (Map.HashMap ThreadId (Child_ q)))
       , _sp_mailbox :: TChan DeadLetter
       , _sp_eventStream :: q SupervisionEvent
       }
+
+type family SupervisorId (k :: *) :: (* -> *) where
+  SupervisorId Uninitialised = Maybe
+  SupervisorId Initialised   = Identity
 
 type SupervisorSpec0 q = Supervisor_ q Uninitialised
 type Supervisor0 q = Supervisor_ q Initialised
@@ -139,7 +144,7 @@ newSupervisor :: QueueLike q => SupervisorSpec0 q -> IO (Supervisor0 q)
 newSupervisor spec = forkIO (handleEvents spec) >>= \tid -> do
   mbx <- atomically $ dupTChan (_sp_mailbox spec)
   return Supervisor_ {
-    _sp_myTid = Just tid
+    _sp_myTid = Identity tid
   , _sp_strategy = _sp_strategy spec
   , _sp_mailbox = mbx
   , _sp_children = _sp_children spec
@@ -168,13 +173,10 @@ activeChildren (Supervisor_ _ _ chRef _ _) = do
 -- be killed as well. To do so, we explore the children tree, killing workers as we go,
 -- and recursively calling `shutdownSupervisor` in case we hit a monitored `Supervisor`.
 shutdownSupervisor :: QueueLike q => Supervisor0 q -> IO ()
-shutdownSupervisor (Supervisor_ sId _ chRef _ _) = do
-  case sId of
-    Nothing -> return ()
-    Just tid -> do
-      chMap <- readIORef chRef
-      processChildren (Map.toList chMap)
-      killThread tid
+shutdownSupervisor (Supervisor_ (Identity tid) _ chRef _ _) = do
+  chMap <- readIORef chRef
+  processChildren (Map.toList chMap)
+  killThread tid
   where
     processChildren [] = return ()
     processChildren (x:xs) = do
@@ -287,9 +289,9 @@ instance Exception MonitorRequest
 -- so that the first supervisor will effectively restart the monitored one.
 -- Thanks to the fact that for the supervisor the restart means we just copy over
 -- its internal state, it should be perfectly fine to do so.
-monitor :: QueueLike q => Supervisor0 q -> Supervisor0 q -> IO ()
-monitor (Supervisor_ _ _ _ mbox _) (Supervisor_ mbId _ _ _ _) = do
-  case mbId of
-    Nothing -> return ()
-    Just tid -> atomically $
-      writeTChan mbox (DeadLetter tid (toException $ MonitoredSupervision tid))
+-- Returns the `ThreadId` of the monitored supervisor.
+monitor :: QueueLike q => Supervisor0 q -> Supervisor0 q -> IO ThreadId
+monitor (Supervisor_ _ _ _ mbox _) (Supervisor_ (Identity tid) _ _ _ _) = do
+  atomically $
+    writeTChan mbox (DeadLetter tid (toException $ MonitoredSupervision tid))
+  return tid
