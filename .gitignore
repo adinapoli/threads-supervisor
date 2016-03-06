@@ -11,3 +11,4 @@ examples/**.hi
 examples/**.o
 threads-supervisor-example*
 .stack-work
+*.tix
