@@ -153,11 +153,11 @@ test1SupSpvrPrematureDemise = forAllM randomLiveTime $ \ttl -> do
   supSpec <- lift $ newSupervisorSpec OneForOne
   sup1 <- lift $ newSupervisor supSpec
   sup2 <- lift $ newSupervisor supSpec
-  tid <- lift  $ sup1 `Supervisor.monitor` sup2
+  tid <- lift  $ Supervisor.monitorWith fibonacciRetryPolicy sup1 sup2
   lift $ do
     throwTo tid (AssertionFailed "You must die")
     threadDelay ttl --give time to restart the thread
-  assertActiveThreads sup1 (== 1)
+  assertActiveThreads sup1 (== 2)
   q <- lift $ qToList (eventStream sup1)
   assertContainsNRestartMsg 1 q
   lift $ shutdownSupervisor sup1

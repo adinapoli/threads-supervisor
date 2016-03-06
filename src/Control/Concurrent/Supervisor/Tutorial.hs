@@ -123,7 +123,7 @@ module Control.Concurrent.Supervisor.Tutorial
 -- >   sup1 <- newSupervisor supSpec
 -- >   sup2 <- newSupervisor supSpec
 -- >
--- >   sup1 `monitor` sup2
+-- >   monitorWith fibonacciRetryPolicy sup1 sup2
 -- >
 -- >   _ <- forkSupervised sup2 fibonacciRetryPolicy job3
 -- >
