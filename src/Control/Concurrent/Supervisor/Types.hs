@@ -4,6 +4,7 @@
 -}
 
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE RecursiveDo #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE RecordWildCards #-}
@@ -141,15 +142,19 @@ newSupervisorSpec strategy size = do
 
 --------------------------------------------------------------------------------
 newSupervisor :: QueueLike q => SupervisorSpec0 q -> IO (Supervisor0 q)
-newSupervisor spec = forkIO (handleEvents spec) >>= \tid -> do
-  mbx <- atomically $ dupTChan (_sp_mailbox spec)
-  return Supervisor_ {
-    _sp_myTid = Identity tid
-  , _sp_strategy = _sp_strategy spec
-  , _sp_mailbox = mbx
-  , _sp_children = _sp_children spec
-  , _sp_eventStream = _sp_eventStream spec
-  }
+newSupervisor spec = mdo
+  tid <- forkIO (handleEvents spec tid)
+  go tid
+  where
+    go tid = do
+      mbx <- atomically $ dupTChan (_sp_mailbox spec)
+      return Supervisor_ {
+        _sp_myTid = Identity tid
+      , _sp_strategy = _sp_strategy spec
+      , _sp_mailbox = mbx
+      , _sp_children = _sp_children spec
+      , _sp_eventStream = _sp_eventStream spec
+      }
 
 -- $log
 
@@ -215,8 +220,8 @@ supervised Supervisor_{..} act = forkFinally act $ \res -> case res of
     atomicModifyIORef' _sp_children $ \chMap -> (Map.delete myId chMap, ())
     atomically $ writeQueue _sp_eventStream (ChildFinished myId now)
 
-restartChild :: QueueLike q => SupervisorSpec0 q -> UTCTime -> ThreadId -> IO Bool
-restartChild (Supervisor_ myId myStrategy myChildren myMailbox myStream) now newDeath = do
+restartChild :: QueueLike q => SupervisorSpec0 q -> ThreadId -> UTCTime -> ThreadId -> IO Bool
+restartChild (Supervisor_ _ myStrategy myChildren myMailbox myStream) myId now newDeath = do
   chMap <- readIORef myChildren
   case Map.lookup newDeath chMap of
     Nothing -> return False
@@ -228,10 +233,10 @@ restartChild (Supervisor_ myId myStrategy myChildren myMailbox myStream) now new
         emitEventChildRestarted newThreadId newRState
     Just (Supvsr rState rPolicy s@(Supervisor_ _ str mbx cld es)) ->
       runRetryPolicy rState rPolicy emitEventChildRestartLimitReached $ \newRState -> do
-        let node = Supervisor_ myId myStrategy myChildren myMailbox myStream
+        let node = Supervisor_ (Identity myId) myStrategy myChildren myMailbox myStream
         let ch = (Supvsr newRState rPolicy s)
         -- TODO: shutdown children?
-        newThreadId <- supervised node (handleEvents $ Supervisor_ Nothing str mbx cld es)
+        newThreadId <- supervised node (handleEvents (Supervisor_ Nothing str mbx cld es) myId)
         writeIORef myChildren (Map.insert newThreadId ch $! Map.delete newDeath chMap)
         emitEventChildRestarted newThreadId newRState
   where
@@ -255,12 +260,12 @@ restartChild (Supervisor_ myId myStrategy myChildren myMailbox myStream) now new
                                 }
          in threadDelay delay >> ifThrottle newRState >> return True
 
-restartOneForOne :: QueueLike q => SupervisorSpec0 q -> UTCTime -> ThreadId -> IO Bool
-restartOneForOne sup now newDeath = restartChild sup now newDeath
+restartOneForOne :: QueueLike q => SupervisorSpec0 q -> ThreadId -> UTCTime -> ThreadId -> IO Bool
+restartOneForOne sup tid now newDeath = restartChild sup tid now newDeath
 
 --------------------------------------------------------------------------------
-handleEvents :: QueueLike q => SupervisorSpec0 q -> IO ()
-handleEvents sup@(Supervisor_ _ myStrategy _ myMailbox myStream) = do
+handleEvents :: QueueLike q => SupervisorSpec0 q -> ThreadId -> IO ()
+handleEvents sup@(Supervisor_ _ myStrategy _ myMailbox myStream) tid = do
   (DeadLetter newDeath ex) <- atomically $ readTChan myMailbox
   now <- getCurrentTime
   atomically $ writeQueue myStream (ChildDied newDeath ex now)
@@ -269,14 +274,14 @@ handleEvents sup@(Supervisor_ _ myStrategy _ myMailbox myStream) = do
   -- Note to the skeptical: It's perfectly fine do put `undefined` here,
   -- as `typeOf` does not inspect the content (try in GHCi!)
   case typeOf ex == (typeOf (undefined :: AsyncException)) of
-    True -> handleEvents sup
+    True -> handleEvents sup tid
     False -> do
       successful <- case myStrategy of
-        OneForOne -> restartOneForOne sup now newDeath
+        OneForOne -> restartOneForOne sup tid now newDeath
       unless successful $ do
         -- TODO: shutdown supervisor?
         return ()
-      handleEvents sup
+      handleEvents sup tid
 
 -- $monitor
 

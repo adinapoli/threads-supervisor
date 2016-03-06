@@ -35,7 +35,8 @@ main = bracketOnError (do
   sup1 <- newSupervisor supSpec
   sup2 <- newSupervisor supSpec
 
-  sup1 `monitor` sup2
+  sup2ThreadId <- sup1 `monitor` sup2
+  putStrLn $ "Supervisor 2 has ThreadId: " ++ show sup2ThreadId
 
   _ <- forkSupervised sup2 fibonacciRetryPolicy job3
 
@@ -44,6 +45,8 @@ main = bracketOnError (do
   _ <- forkSupervised sup1 fibonacciRetryPolicy job4
   _ <- forkSupervised sup1 fibonacciRetryPolicy job5
   _ <- forkIO (go (eventStream sup1))
+  -- We kill sup2
+  throwTo sup2ThreadId ThreadKilled
   return sup1) shutdownSupervisor (\_ -> threadDelay 10000000000)
   where
    go eS = do
