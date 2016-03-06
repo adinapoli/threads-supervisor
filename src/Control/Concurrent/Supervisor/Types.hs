@@ -58,13 +58,15 @@ import           Data.Typeable
 data Uninitialised
 data Initialised
 
+type Mailbox = TChan DeadLetter
+
 --------------------------------------------------------------------------------
 data Supervisor_ q a = Supervisor_ {
         _sp_myTid          :: !(SupervisorId a ThreadId)
       , _sp_strategy       :: !RestartStrategy
       , _sp_children       :: !(IORef (Map.HashMap ThreadId (Child_ q)))
-      , _sp_mailbox        :: TChan DeadLetter
-      , _sp_parent_mailbox :: !(IORef (Maybe (TChan DeadLetter)))
+      , _sp_mailbox        :: Mailbox
+      , _sp_parent_mailbox :: !(IORef (Maybe Mailbox))
       -- ^ The mailbox of the parent process (which is monitoring this one), if any.
       , _sp_eventStream    :: q SupervisionEvent
       }
@@ -143,15 +145,28 @@ newSupervisorSpec strategy size = do
 
 -- $supervise
 
+
+--------------------------------------------------------------------------------
+tryNotifyParent :: IORef (Maybe Mailbox) -> ThreadId -> SomeException -> IO ()
+tryNotifyParent mbPMbox myId ex = do
+  readIORef mbPMbox >>= \m -> case m of
+    Nothing -> return ()
+    Just m' -> atomically $ writeTChan m' (DeadLetter myId ex)
+
 --------------------------------------------------------------------------------
 newSupervisor :: QueueLike q => SupervisorSpec0 q -> IO (Supervisor0 q)
 newSupervisor spec = mdo
-  tid <- forkIO (handleEvents spec tid)
-  go tid
+  parentMbx <- newIORef Nothing
+  tid <- forkFinally (handleEvents spec tid) $ \res -> case res of
+    Left ex -> do
+      bracket myThreadId return $ \myId -> do
+        -- If we have a parent supervisor watching us, notify it we died.
+        tryNotifyParent parentMbx myId ex
+    Right v -> return v
+  go parentMbx tid
   where
-    go tid = do
-      mbx       <- atomically $ dupTChan (_sp_mailbox spec)
-      parentMbx <- newIORef Nothing
+    go parentMbx tid = do
+      mbx <- atomically $ dupTChan (_sp_mailbox spec)
       return Supervisor_ {
         _sp_myTid = Identity tid
       , _sp_strategy = _sp_strategy spec
@@ -168,12 +183,12 @@ newSupervisor spec = mdo
 -- to react. It's using a bounded queue to explicitly avoid memory leaks in case
 -- you do not want to drain the queue to listen to incoming events.
 eventStream :: QueueLike q => Supervisor0 q -> q SupervisionEvent
-eventStream (Supervisor_{_sp_eventStream}) = _sp_eventStream
+eventStream Supervisor_{_sp_eventStream} = _sp_eventStream
 
 --------------------------------------------------------------------------------
 -- | Returns the number of active threads at a given moment in time.
 activeChildren :: QueueLike q => Supervisor0 q -> IO Int
-activeChildren (Supervisor_{_sp_children}) = do
+activeChildren Supervisor_{_sp_children} = do
   readIORef _sp_children >>= return . length . Map.keys
 
 -- $shutdown
@@ -218,14 +233,8 @@ forkSupervised sup@Supervisor_{..} policy act =
 --------------------------------------------------------------------------------
 supervised :: QueueLike q => Supervisor0 q -> IO () -> IO ThreadId
 supervised Supervisor_{..} act = forkFinally act $ \res -> case res of
-  Left ex -> bracket myThreadId return $ \myId -> do
-    pMboxMb <- readIORef _sp_parent_mailbox
-    atomically $ do
-      writeTChan _sp_mailbox (DeadLetter myId ex)
-      -- In case we have a parent mailbox available, notify our death.
-      case pMboxMb of
-        Nothing -> return ()
-        Just m  -> writeTChan m (DeadLetter myId ex)
+  Left ex -> bracket myThreadId return $ \myId -> atomically $ do
+    writeTChan _sp_mailbox (DeadLetter myId ex)
   Right _ -> bracket myThreadId return $ \myId -> do
     now <- getCurrentTime
     atomicModifyIORef' _sp_children $ \chMap -> (Map.delete myId chMap, ())
@@ -317,13 +326,18 @@ monitorWith :: QueueLike q
             -> Supervisor0 q
             -- ^ The 'supervised' supervisor
             -> IO ThreadId
-monitorWith policy (Supervisor_ _ _ ch mbox _ _) sup2@(Supervisor_ (Identity newChild) _ _ _ pMbox _) = do
-  theMb <- readIORef pMbox
-  case theMb of
-    Just _ -> return newChild -- Do nothing, this supervisor is already monitored.
+monitorWith policy sup1 sup2 = do
+  let sup1Children = _sp_children sup1
+  let sup1Mailbox  = _sp_mailbox sup1
+  let (Identity sup2Id) = _sp_myTid sup2
+  let sup2ParentMailbox = _sp_parent_mailbox sup2
+
+  readIORef sup2ParentMailbox >>= \mbox -> case mbox of
+    Just _ -> return sup2Id -- Do nothing, this supervisor is already being monitored.
     Nothing -> do
       let sup2RetryStatus = defaultRetryStatus
       let ch' = Supvsr sup2RetryStatus policy sup2
-      atomicModifyIORef' ch $ \chMap -> (Map.insert newChild ch' chMap, ())
-      atomicModifyIORef' pMbox $ const (Just mbox, ())
-      return newChild
+      atomicModifyIORef' sup1Children $ \chMap -> (Map.insert sup2Id ch' chMap, ())
+      duped <- atomically $ dupTChan sup1Mailbox
+      atomicModifyIORef' sup2ParentMailbox $ const (Just duped, ())
+      return sup2Id
