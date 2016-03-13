@@ -127,8 +127,7 @@ assertContainsRestartMsg (x:xs) tid = case x of
 -- Control.Concurrent.Supervisor tests
 test1SupThreadNoEx :: IOProperty ()
 test1SupThreadNoEx = forAllM randomLiveTime $ \ttl -> do
-  supSpec <- lift $ newSupervisorSpec OneForOne
-  sup <- lift $ newSupervisor supSpec
+  sup <- lift $ newSupervisor OneForOne
   _ <- lift (forkSupervised sup fibonacciRetryPolicy (forever $ threadDelay ttl))
   assertActiveThreads sup (== 1)
   lift $ shutdownSupervisor sup
@@ -136,8 +135,7 @@ test1SupThreadNoEx = forAllM randomLiveTime $ \ttl -> do
 --------------------------------------------------------------------------------
 test1SupThreadPrematureDemise :: IOProperty ()
 test1SupThreadPrematureDemise = forAllM randomLiveTime $ \ttl -> do
-  supSpec <- lift $ newSupervisorSpec OneForOne
-  sup <- lift $ newSupervisor supSpec
+  sup <- lift $ newSupervisor OneForOne
   tid <- lift (forkSupervised sup fibonacciRetryPolicy (forever $ threadDelay ttl))
   lift $ do
     throwTo tid (AssertionFailed "You must die")
@@ -150,14 +148,13 @@ test1SupThreadPrematureDemise = forAllM randomLiveTime $ \ttl -> do
 --------------------------------------------------------------------------------
 test1SupSpvrPrematureDemise :: IOProperty ()
 test1SupSpvrPrematureDemise = forAllM randomLiveTime $ \ttl -> do
-  supSpec <- lift $ newSupervisorSpec OneForOne
-  sup1 <- lift $ newSupervisor supSpec
-  sup2 <- lift $ newSupervisor supSpec
+  sup1 <- lift $ newSupervisor OneForOne
+  sup2 <- lift $ newSupervisor OneForOne
   tid <- lift  $ Supervisor.monitorWith fibonacciRetryPolicy sup1 sup2
   lift $ do
     throwTo tid (AssertionFailed "You must die")
     threadDelay ttl --give time to restart the thread
-  assertActiveThreads sup1 (== 2)
+  assertActiveThreads sup1 (== 1)
   q <- lift $ qToList (eventStream sup1)
   assertContainsNRestartMsg 1 q
   lift $ shutdownSupervisor sup1
@@ -187,8 +184,7 @@ maxWait ta = go ta []
 -- the side effects strikes.
 testKillingSpree :: IOProperty ()
 testKillingSpree = forAllM arbitrary $ \ep@(ExecutionPlan _ acts) -> do
-  supSpec <- lift $ newSupervisorSpec OneForOne
-  sup <- lift $ newSupervisor supSpec
+  sup <- lift $ newSupervisor OneForOne
   _ <- forM acts $ lift . fromAction sup
   lift (threadDelay $ maxWait acts * 2)
   q <- lift $ qToList (eventStream sup)
@@ -202,8 +198,7 @@ testKillingSpree = forAllM arbitrary $ \ep@(ExecutionPlan _ acts) -> do
 testSupCleanup :: IOProperty ()
 testSupCleanup = forAllM (vectorOf 100 arbitrary) $ \ttls -> do
   let acts = map DieAfter ttls
-  supSpec <- lift $ newSupervisorSpec OneForOne
-  sup <- lift $ newSupervisor supSpec
+  sup <- lift $ newSupervisor OneForOne
   _ <- forM acts $ lift . fromAction sup
   lift (threadDelay $ maxWait acts * 2)
   q <- lift $ qToList (eventStream sup)
@@ -213,8 +208,7 @@ testSupCleanup = forAllM (vectorOf 100 arbitrary) $ \ttls -> do
 
 testTooManyRestarts :: Assertion
 testTooManyRestarts = do
-  supSpec <- newSupervisorSpec OneForOne
-  sup <- newSupervisor supSpec
+  sup <- newSupervisor OneForOne
   _ <- forkSupervised sup (limitRetries 5) $ error "die"
   threadDelay 2000000
   q <- qToList (eventStream sup)

@@ -2,10 +2,10 @@
 
 module Main where
 
-import Control.Concurrent.Supervisor
 import Control.Concurrent
-import Control.Exception
 import Control.Concurrent.STM
+import Control.Concurrent.Supervisor
+import Control.Exception
 
 job1 :: IO ()
 job1 = do
@@ -30,10 +30,8 @@ job5 = threadDelay 100 >> error "dead"
 
 main :: IO ()
 main = bracketOnError (do
-  supSpec <- newSupervisorSpec OneForOne
-
-  sup1 <- newSupervisor supSpec
-  sup2 <- newSupervisor supSpec
+  sup1 <- newSupervisor OneForOne
+  sup2 <- newSupervisor OneForOne
 
   sup2ThreadId <- monitorWith fibonacciRetryPolicy sup1 sup2
   putStrLn $ "Supervisor 2 has ThreadId: " ++ show sup2ThreadId
@@ -50,6 +48,6 @@ main = bracketOnError (do
   return sup1) shutdownSupervisor (\_ -> threadDelay 10000000000)
   where
    go eS = do
-     newE <- atomically $ readTQueue eS
+     newE <- atomically $ readQueue eS
      print newE
      go eS
