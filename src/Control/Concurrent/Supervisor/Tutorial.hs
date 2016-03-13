@@ -23,9 +23,6 @@ module Control.Concurrent.Supervisor.Tutorial
     -- * Different type of jobs
     -- $jobs
 
-    -- * Creating a SupervisorSpec
-    -- $createSpec
-
     -- * Creating a Supervisor
     -- $createSupervisor
 
@@ -87,22 +84,11 @@ module Control.Concurrent.Supervisor.Tutorial
 --
 -- These jobs represent a significant pool of our everyday computations in the IO monad
 
--- $createSpec
--- A 'SupervisorSpec' simply holds the state of our supervision, and can be safely shared
--- between supervisors. Under the hood, both the `SupervisorSpec` and the `Supervisor`
--- share the same structure; in fact, they are  just type synonyms:
---
--- > type SupervisorSpec = Supervisor_ Uninitialised
--- > type Supervisor = Supervisor_ Initialised
--- The important difference though, is that the `SupervisorSpec` does not imply the creation
--- of an asynchronous thread, which the latter does. To keep separated the initialisation
--- of the data structure from the logic of supervising, we use  phantom types to
--- force you create a spec first.
--- Creating a spec it just a matter of calling `newSupervisorSpec`.
-
 -- $createSupervisor
--- Creating a 'Supervisor' from a 'SupervisionSpec', is as simple as calling `newSupervisor`.
--- immediately after doing so, a new thread will be started, monitoring any subsequent IO actions
+-- Creating a 'Supervisor' is as simple as calling `newSupervisor`, specifying the `RestartStrategy`
+-- you want to use as well as the size of the `EventStream` (this depends whether you are using a Bounded
+-- supervisor or not).
+-- Immediately after doing so, a new thread will be started, monitoring any subsequent IO actions
 -- submitted to it.
 
 -- $boundedVsUnbounded
@@ -118,12 +104,11 @@ module Control.Concurrent.Supervisor.Tutorial
 --
 -- > main :: IO ()
 -- > main = bracketOnError (do
--- >   supSpec <- newSupervisorSpec OneForOne
 -- >
--- >   sup1 <- newSupervisor supSpec
--- >   sup2 <- newSupervisor supSpec
+-- >   sup1 <- newSupervisor OneForOne
+-- >   sup2 <- newSupervisor OneForOne
 -- >
--- >   sup1 `monitor` sup2
+-- >   monitorWith fibonacciRetryPolicy sup1 sup2
 -- >
 -- >   _ <- forkSupervised sup2 fibonacciRetryPolicy job3
 -- >
@@ -138,14 +123,12 @@ module Control.Concurrent.Supervisor.Tutorial
 -- >      print newE
 -- >      go eS
 --
--- What we have done here, was to spawn our supervisor out from a spec,
--- any using our swiss knife `forkSupervised` to spawn for supervised
+-- What we have done here, was to spawn two supervisors and we have used
+-- our swiss knife `forkSupervised` to spawn four supervised
 -- IO computations. As you can see, if we partially apply `forkSupervised`,
 -- its type resemble `forkIO` one; this is by design, as we want to keep
--- this API as IO-friendly as possible
--- in the very same example, we also create another supervisor
--- (from the same spec, but you can create a separate one as well)
--- and we ask the first supervisor to monitor the second one.
+-- this API as IO-friendly as possible.
+-- Note also how we can ask the first supervisor to monitor the second one.
 --
 -- `fibonacciRetryPolicy` is a constructor for the `RetryPolicy`, which creates
 -- under the hood a `RetryPolicy` from the "retry" package which is using

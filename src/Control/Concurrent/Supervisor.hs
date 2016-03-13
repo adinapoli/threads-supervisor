@@ -6,38 +6,25 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE DeriveDataTypeable #-}
 
 module Control.Concurrent.Supervisor
-  ( SupervisorSpec
-  , Supervisor
+  ( Supervisor
   , Child
-  , newSupervisorSpec
   , newSupervisor
   , module T
   ) where
 
-import Control.Concurrent.Supervisor.Types as T hiding (newSupervisor, newSupervisorSpec)
-import qualified Control.Concurrent.Supervisor.Types as Types
 import           Control.Concurrent.STM
+import           Control.Concurrent.Supervisor.Types as T hiding (Supervisor, newSupervisor)
+import qualified Control.Concurrent.Supervisor.Types as Types
 
-type SupervisorSpec = Types.SupervisorSpec0 TQueue
-type Supervisor = Types.Supervisor0 TQueue
+type Supervisor = Types.Supervisor TQueue
 
 --------------------------------------------------------------------------------
 type Child = Types.Child_ TQueue
 
 --------------------------------------------------------------------------------
--- | Creates a new 'SupervisorSpec'. The reason it doesn't return a
--- 'Supervisor' is to force you to call 'supervise' explicitly, in order to start the
--- supervisor thread.
-newSupervisorSpec :: Types.RestartStrategy -> IO SupervisorSpec
-newSupervisorSpec strategy = Types.newSupervisorSpec strategy 0
-
--- $supervise
-
---------------------------------------------------------------------------------
-newSupervisor :: SupervisorSpec -> IO Supervisor
-newSupervisor spec = Types.newSupervisor spec
+-- NOTE: The `maxBound` value will be ignore by the underlying implementation.
+newSupervisor :: RestartStrategy -> IO Supervisor
+newSupervisor str = Types.newSupervisor str maxBound 
