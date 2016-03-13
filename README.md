@@ -26,6 +26,10 @@
 
 # Changelog
 
+* 1.2.0.0 (**Breaking changes, sorry!**)
+    - Remove `SupervisorSpec`
+    - Rename `monitor` to `monitorWith`
+
 * 1.1.0.0
     - (**Breaking Change**) Support lts-5.1 and retry-0.7 (https://github.com/adinapoli/threads-supervisor/pull/9)
 
