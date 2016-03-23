@@ -19,6 +19,7 @@ module Control.Concurrent.Supervisor.Types
   , RestartAction
   , SupervisionEvent(..)
   , RestartStrategy(..)
+  , RestartResult(..)
   -- * Creating a new supervisor
   -- $new
   , newSupervisor
@@ -43,11 +44,12 @@ import           Control.Concurrent
 import           Control.Concurrent.STM
 import           Control.Exception
 import           Control.Monad
+import           Control.Monad.IO.Class
 import           Control.Retry
 import qualified Data.HashMap.Strict as Map
 import           Data.IORef
 import           Data.Time
-import           Data.Typeable
+import           Data.Time.Clock.POSIX
 
 --------------------------------------------------------------------------------
 type Mailbox = TChan DeadLetter
@@ -87,11 +89,26 @@ instance QueueLike TBQueue where
     unless isFull $ writeTBQueue q e
 
 --------------------------------------------------------------------------------
-data DeadLetter = DeadLetter ThreadId SomeException
+data DeadLetter = DeadLetter !LetterEpoch !ThreadId !SomeException
 
 --------------------------------------------------------------------------------
-data Child_ q = Worker !RetryStatus (RetryPolicyM IO) RestartAction
-              | Supvsr !RetryStatus (RetryPolicyM IO) !(Supervisor q)
+type Epoch = POSIXTime
+newtype LetterEpoch = LetterEpoch Epoch deriving Show
+newtype ChildEpoch  = ChildEpoch  Epoch deriving Show
+
+--------------------------------------------------------------------------------
+data RestartResult =
+    Restarted !ThreadId !ThreadId !RetryStatus !UTCTime
+    -- ^ The supervised `Child_` was restarted successfully.
+  | StaleDeadLetter !ThreadId !LetterEpoch !ChildEpoch !UTCTime
+    -- ^ A stale `DeadLetter` was received.
+  | RestartFailed SupervisionEvent
+    -- ^ The restart failed for a reason decribed by a `SupervisionEvent`
+  deriving Show
+
+--------------------------------------------------------------------------------
+data Child_ q = Worker !ChildEpoch !RetryStatus (RetryPolicyM IO) RestartAction
+              | Supvsr !ChildEpoch !RetryStatus (RetryPolicyM IO) !(Supervisor q)
 
 --------------------------------------------------------------------------------
 type RestartAction = ThreadId -> IO ThreadId
@@ -101,6 +118,8 @@ data SupervisionEvent =
      ChildBorn !ThreadId !UTCTime
    | ChildDied !ThreadId !SomeException !UTCTime
    | ChildRestarted !ThreadId !ThreadId !RetryStatus !UTCTime
+   | ChildNotFound  !ThreadId !UTCTime
+   | StaleDeadLetterReceived  !ThreadId !LetterEpoch !ChildEpoch !UTCTime
    | ChildRestartLimitReached !ThreadId !RetryStatus !UTCTime
    | ChildFinished !ThreadId !UTCTime
    deriving Show
@@ -118,11 +137,17 @@ fibonacciRetryPolicy :: RetryPolicyM IO
 fibonacciRetryPolicy = fibonacciBackoff 100
 
 --------------------------------------------------------------------------------
+getEpoch :: MonadIO m => m Epoch
+getEpoch = liftIO getPOSIXTime
+
+--------------------------------------------------------------------------------
 tryNotifyParent :: IORef (Maybe Mailbox) -> ThreadId -> SomeException -> IO ()
 tryNotifyParent mbPMbox myId ex = do
   readIORef mbPMbox >>= \m -> case m of
     Nothing -> return ()
-    Just m' -> atomically $ writeTChan m' (DeadLetter myId ex)
+    Just m' -> do
+      e <- getEpoch
+      atomically $ writeTChan m' (DeadLetter (LetterEpoch e) myId ex)
 
 -- $new
 -- In order to create a new supervisor, you need a `SupervisorSpec`,
@@ -193,7 +218,7 @@ shutdownSupervisor (Supervisor tid ctx) = do
     processChildren (x:xs) = do
       case x of
         (workerTid, Worker{}) -> killThread workerTid
-        (_, Supvsr _ _ s) -> shutdownSupervisor s
+        (_, Supvsr _ _ _ s) -> shutdownSupervisor s
       processChildren xs
 
 -- $fork
@@ -210,7 +235,8 @@ forkSupervised :: QueueLike q
                -> IO ThreadId
 forkSupervised sup@Supervisor{..} policy act =
   bracket (supervised sup act) return $ \newChild -> do
-    let ch = Worker defaultRetryStatus policy (const (supervised sup act))
+    e <- getEpoch
+    let ch = Worker (ChildEpoch e) defaultRetryStatus policy (const (supervised sup act))
     atomicModifyIORef' (_sc_children _sp_ctx) $ \chMap -> (Map.insert newChild ch chMap, ())
     now <- getCurrentTime
     atomically $ writeQueue (_sc_eventStream _sp_ctx) (ChildBorn newChild now)
@@ -219,80 +245,110 @@ forkSupervised sup@Supervisor{..} policy act =
 --------------------------------------------------------------------------------
 supervised :: QueueLike q => Supervisor q -> IO () -> IO ThreadId
 supervised Supervisor{..} act = forkFinally act $ \res -> case res of
-  Left ex -> bracket myThreadId return $ \myId -> atomically $ do
-    writeTChan (_sc_mailbox _sp_ctx) (DeadLetter myId ex)
+  Left ex -> bracket myThreadId return $ \myId -> do
+    e <- getEpoch
+    atomically $ writeTChan (_sc_mailbox _sp_ctx) (DeadLetter (LetterEpoch e) myId ex)
   Right _ -> bracket myThreadId return $ \myId -> do
     now <- getCurrentTime
     atomicModifyIORef' (_sc_children _sp_ctx) $ \chMap -> (Map.delete myId chMap, ())
     atomically $ writeQueue (_sc_eventStream _sp_ctx) (ChildFinished myId now)
 
 --------------------------------------------------------------------------------
-restartChild :: QueueLike q => SupervisionCtx q -> UTCTime -> ThreadId -> IO Bool
-restartChild ctx now newDeath = do
+-- | Ignore any stale `DeadLetter`, which is a `DeadLetter` with an `Epoch`
+-- smaller than the one stored in the `Child_` to restart. Such stale `DeadLetter`
+-- are simply ignored.
+ignoringStaleLetters :: ThreadId
+                     -> LetterEpoch
+                     -> ChildEpoch
+                     -> IO RestartResult
+                     -> IO RestartResult
+ignoringStaleLetters tid deadLetterEpoch@(LetterEpoch l) childEpoch@(ChildEpoch c) act = do
+  now <- getCurrentTime
+  if l < c then return (StaleDeadLetter tid deadLetterEpoch childEpoch now) else act
+
+--------------------------------------------------------------------------------
+restartChild :: QueueLike q
+             => SupervisionCtx q
+             -> LetterEpoch
+             -> UTCTime
+             -> ThreadId
+             -> IO RestartResult
+restartChild ctx deadLetterEpoch now newDeath = do
   chMap <- readIORef (_sc_children ctx)
   case Map.lookup newDeath chMap of
-    Nothing -> return False
-    Just (Worker rState rPolicy act) ->
+    Nothing -> return $ RestartFailed (ChildNotFound newDeath now)
+    Just (Worker workerEpoch rState rPolicy act) -> ignoringStaleLetters newDeath deadLetterEpoch workerEpoch $ do
       runRetryPolicy rState rPolicy emitEventChildRestartLimitReached $ \newRState -> do
-        let ch = Worker newRState rPolicy act
+        e <- getEpoch
+        let ch = Worker (ChildEpoch e) newRState rPolicy act
         newThreadId <- act newDeath
         writeIORef (_sc_children ctx) (Map.insert newThreadId ch $! Map.delete newDeath chMap)
         emitEventChildRestarted newThreadId newRState
-    Just (Supvsr rState rPolicy (Supervisor deathSup ctx)) -> do
-      runRetryPolicy rState rPolicy emitEventChildRestartLimitReached $ \newRState -> do
-        restartedSup <- newSupervisor (_sc_strategy ctx) (_sc_eventStreamSize ctx)
-        let ch = (Supvsr newRState rPolicy restartedSup)
-        -- TODO: shutdown children?
-        let newThreadId = _sp_myTid restartedSup
-        writeIORef (_sc_children ctx) (Map.insert newThreadId ch $! Map.delete deathSup chMap)
-        emitEventChildRestarted newThreadId newRState
+    Just (Supvsr supervisorEpoch rState rPolicy (Supervisor deathSup ctx')) -> do
+      ignoringStaleLetters newDeath deadLetterEpoch supervisorEpoch $ do
+        runRetryPolicy rState rPolicy emitEventChildRestartLimitReached $ \newRState -> do
+          e <- getEpoch
+          restartedSup <- newSupervisor (_sc_strategy ctx) (_sc_eventStreamSize ctx')
+          let ch = Supvsr (ChildEpoch e) newRState rPolicy restartedSup
+          -- TODO: shutdown children?
+          let newThreadId = _sp_myTid restartedSup
+          writeIORef (_sc_children ctx) (Map.insert newThreadId ch $! Map.delete deathSup chMap)
+          emitEventChildRestarted newThreadId newRState
   where
-    emitEventChildRestarted newThreadId newRState = atomically $
-      writeQueue (_sc_eventStream ctx) (ChildRestarted newDeath newThreadId newRState now)
-    emitEventChildRestartLimitReached newRState = atomically $
-      writeQueue (_sc_eventStream ctx) (ChildRestartLimitReached newDeath newRState now)
+    emitEventChildRestarted newThreadId newRState = do
+      return $ Restarted newDeath newThreadId newRState now
+    emitEventChildRestartLimitReached newRState = do
+      return $ RestartFailed (ChildRestartLimitReached newDeath newRState now)
     runRetryPolicy :: RetryStatus
                    -> RetryPolicyM IO
-                   -> (RetryStatus -> IO ())
-                   -> (RetryStatus -> IO ())
-                   -> IO Bool
+                   -> (RetryStatus -> IO RestartResult)
+                   -> (RetryStatus -> IO RestartResult)
+                   -> IO RestartResult
     runRetryPolicy rState rPolicy ifAbort ifThrottle = do
      maybeDelay <- getRetryPolicyM rPolicy rState
      case maybeDelay of
-       Nothing -> ifAbort rState >> return False
+       Nothing -> ifAbort rState
        Just delay ->
          let newRState = rState { rsIterNumber = rsIterNumber rState + 1
                                 , rsCumulativeDelay = rsCumulativeDelay rState + delay
                                 , rsPreviousDelay = Just (maybe 0 (const delay) (rsPreviousDelay rState))
                                 }
-         in threadDelay delay >> ifThrottle newRState >> return True
+         in threadDelay delay >> ifThrottle newRState
 
 --------------------------------------------------------------------------------
 restartOneForOne :: QueueLike q
                  => SupervisionCtx q
+                 -> LetterEpoch
                  -> UTCTime
                  -> ThreadId
-                 -> IO Bool
+                 -> IO RestartResult
 restartOneForOne = restartChild
 
 --------------------------------------------------------------------------------
 handleEvents :: QueueLike q => SupervisionCtx q -> IO ()
 handleEvents ctx@SupervisionCtx{..} = do
-  (DeadLetter newDeath ex) <- atomically $ readTChan _sc_mailbox
+  (DeadLetter epoch newDeath ex) <- atomically $ readTChan _sc_mailbox
   now <- getCurrentTime
   atomically $ writeQueue _sc_eventStream (ChildDied newDeath ex now)
   -- If we catch an `AsyncException`, we have nothing but good
-  -- reasons not to restart the thread.
-  -- Note to the skeptical: It's perfectly fine do put `undefined` here,
-  -- as `typeOf` does not inspect the content (try in GHCi!)
-  case typeOf ex == (typeOf (undefined :: AsyncException)) of
-    True -> handleEvents ctx
-    False -> do
-      successful <- case _sc_strategy of
-        OneForOne -> restartOneForOne ctx now newDeath
-      unless successful $ do
-        -- TODO: shutdown supervisor?
-        return ()
+  -- reasons NOT to restart the thread.
+  case asyncExceptionFromException ex of
+    Just (_ :: AsyncException) -> do
+      -- Remove the `Child_` from the map, log what happenend.
+      atomicModifyIORef' _sc_children $ \chMap -> (Map.delete newDeath chMap, ())
+      atomically $ writeQueue _sc_eventStream (ChildDied newDeath ex now)
+      handleEvents ctx
+    Nothing -> do
+      restartResult <- case _sc_strategy of
+        OneForOne -> restartOneForOne ctx epoch now newDeath
+      -- TODO: shutdown supervisor?
+      atomically $ case restartResult of
+        StaleDeadLetter tid le we tm -> do
+          writeQueue _sc_eventStream (StaleDeadLetterReceived tid le we tm)
+        RestartFailed reason -> do
+          writeQueue _sc_eventStream reason
+        Restarted oldId newId rStatus tm ->
+          writeQueue _sc_eventStream (ChildRestarted oldId newId rStatus tm)
       handleEvents ctx
 
 -- $monitor
@@ -320,8 +376,9 @@ monitorWith policy sup1 sup2 = do
   readIORef sup2ParentMailbox >>= \mbox -> case mbox of
     Just _ -> return sup2Id -- Do nothing, this supervisor is already being monitored.
     Nothing -> do
+      e <- getEpoch
       let sup2RetryStatus = defaultRetryStatus
-      let ch' = Supvsr sup2RetryStatus policy sup2
+      let ch' = Supvsr (ChildEpoch e) sup2RetryStatus policy sup2
       atomicModifyIORef' sup1Children $ \chMap -> (Map.insert sup2Id ch' chMap, ())
       duped <- atomically $ dupTChan sup1Mailbox
       atomicModifyIORef' sup2ParentMailbox $ const (Just duped, ())

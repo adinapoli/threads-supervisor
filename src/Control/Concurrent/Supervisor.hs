@@ -27,4 +27,4 @@ type Child = Types.Child_ TQueue
 --------------------------------------------------------------------------------
 -- NOTE: The `maxBound` value will be ignore by the underlying implementation.
 newSupervisor :: RestartStrategy -> IO Supervisor
-newSupervisor str = Types.newSupervisor str maxBound 
+newSupervisor str = Types.newSupervisor str maxBound

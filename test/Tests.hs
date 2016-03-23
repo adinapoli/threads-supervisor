@@ -1,5 +1,4 @@
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 module Tests where
@@ -95,31 +94,38 @@ assertContainsNMsg matcher !n (x:xs) = case matcher x of
   False -> assertContainsNMsg matcher n xs
 
 --------------------------------------------------------------------------------
+assertContainsNDiedMsg :: Int -> [SupervisionEvent] -> IOProperty ()
+assertContainsNDiedMsg n e = lift $ assertContainsNMsg matches n e
+  where
+    matches ChildDied{} = True
+    matches _ = False
+
+--------------------------------------------------------------------------------
 assertContainsNRestartMsg :: Int -> [SupervisionEvent] -> IOProperty ()
 assertContainsNRestartMsg n e = lift $ assertContainsNMsg matches n e
   where
-    matches (ChildRestarted{}) = True
+    matches ChildRestarted{} = True
     matches _ = False
 
 --------------------------------------------------------------------------------
 assertContainsNFinishedMsg :: Int -> [SupervisionEvent] -> IOProperty ()
 assertContainsNFinishedMsg n e = lift $ assertContainsNMsg matches n e
   where
-    matches (ChildFinished{}) = True
+    matches ChildFinished{} = True
     matches _ = False
 
 --------------------------------------------------------------------------------
 assertContainsNLimitReached :: Int -> [SupervisionEvent] -> IO ()
 assertContainsNLimitReached = assertContainsNMsg matches
   where
-    matches (ChildRestartLimitReached{}) = True
+    matches ChildRestartLimitReached{} = True
     matches _ = False
 
 --------------------------------------------------------------------------------
 assertContainsRestartMsg :: [SupervisionEvent] -> ThreadId -> IOProperty ()
 assertContainsRestartMsg [] _ = QM.assert False
 assertContainsRestartMsg (x:xs) tid = case x of
-  ((ChildRestarted old _ _ _)) ->
+  (ChildRestarted old _ _ _) ->
     if old == tid then QM.assert True else assertContainsRestartMsg xs tid
   _ -> assertContainsRestartMsg xs tid
 
@@ -130,6 +136,22 @@ test1SupThreadNoEx = forAllM randomLiveTime $ \ttl -> do
   sup <- lift $ newSupervisor OneForOne
   _ <- lift (forkSupervised sup fibonacciRetryPolicy (forever $ threadDelay ttl))
   assertActiveThreads sup (== 1)
+  lift $ shutdownSupervisor sup
+
+--------------------------------------------------------------------------------
+test1SupThreadPrematureAsyncDemise :: IOProperty ()
+test1SupThreadPrematureAsyncDemise = forAllM randomLiveTime $ \ttl -> do
+  sup <- lift $ newSupervisor OneForOne
+  tid <- lift (forkSupervised sup fibonacciRetryPolicy (forever $ threadDelay ttl))
+  lift $ do
+    throwTo tid ThreadKilled
+    threadDelay ttl
+  -- Due to the fact an `AsyncException` was thrown, the thread shouldn't have been
+  -- restarted.
+  assertActiveThreads sup (== 0)
+  q <- lift $ qToList (eventStream sup)
+  assertContainsNRestartMsg 0 q
+  assertContainsNDiedMsg 1 q
   lift $ shutdownSupervisor sup
 
 --------------------------------------------------------------------------------
