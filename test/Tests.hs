@@ -130,6 +130,14 @@ assertContainsRestartMsg (x:xs) tid = case x of
   _ -> assertContainsRestartMsg xs tid
 
 --------------------------------------------------------------------------------
+testShowInstancesLaws :: Assertion
+testShowInstancesLaws = do
+  let l = LetterEpoch 0
+  let c = ChildEpoch  0
+  HUnit.assert (show l == "LetterEpoch 0s")
+  HUnit.assert (show c == "ChildEpoch 0s")
+
+--------------------------------------------------------------------------------
 -- Control.Concurrent.Supervisor tests
 test1SupThreadNoEx :: IOProperty ()
 test1SupThreadNoEx = forAllM randomLiveTime $ \ttl -> do
@@ -173,6 +181,24 @@ test1SupSpvrPrematureDemise = forAllM randomLiveTime $ \ttl -> do
   sup1 <- lift $ newSupervisor OneForOne
   sup2 <- lift $ newSupervisor OneForOne
   tid <- lift  $ Supervisor.monitorWith fibonacciRetryPolicy sup1 sup2
+  lift $ do
+    throwTo tid (AssertionFailed "You must die")
+    threadDelay ttl --give time to restart the thread
+  assertActiveThreads sup1 (== 1)
+  q <- lift $ qToList (eventStream sup1)
+  assertContainsNRestartMsg 1 q
+  lift $ shutdownSupervisor sup1
+  -- TODO: Assert sup2 has been shutdown as result.
+
+--------------------------------------------------------------------------------
+test1SupSpvrDouble :: IOProperty ()
+test1SupSpvrDouble = forAllM randomLiveTime $ \ttl -> do
+  sup1 <- lift $ newSupervisor OneForOne
+  sup2 <- lift $ newSupervisor OneForOne
+  sup3 <- lift $ newSupervisor OneForOne
+  tid  <- lift  $ Supervisor.monitorWith fibonacciRetryPolicy sup1 sup2
+  tid2 <- lift  $ Supervisor.monitorWith fibonacciRetryPolicy sup3 sup2
+  QM.assert (tid == tid2)
   lift $ do
     throwTo tid (AssertionFailed "You must die")
     threadDelay ttl --give time to restart the thread
