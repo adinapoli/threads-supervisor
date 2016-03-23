@@ -19,6 +19,7 @@ module Control.Concurrent.Supervisor.Types
   , RestartAction
   , SupervisionEvent(..)
   , RestartStrategy(..)
+  , RestartResult(..)
   -- * Creating a new supervisor
   -- $new
   , newSupervisor
@@ -92,6 +93,19 @@ instance QueueLike TBQueue where
 data DeadLetter = DeadLetter !Epoch !ThreadId !SomeException
 
 type Epoch = POSIXTime
+
+--------------------------------------------------------------------------------
+data RestartResult =
+    Restarted
+    -- ^ The supervised `Child_` was restarted successfully.
+  | RestartLimitReached
+    -- ^ The `Child_` was restarted too many times and the limit was reached.
+  | ChildNotFound
+    -- ^ The `Child_` couldn't be found in the Supervisor's map.
+  | StaleDeadLetter
+    -- ^ A stale `DeadLetter` was received.
+  | RestartFailed SomeException
+    -- ^ The restart failed for a reason decribed by `SomeException`
 
 --------------------------------------------------------------------------------
 data Child_ q = Worker !Epoch !RetryStatus (RetryPolicyM IO) RestartAction
@@ -239,27 +253,41 @@ supervised Supervisor{..} act = forkFinally act $ \res -> case res of
     atomically $ writeQueue (_sc_eventStream _sp_ctx) (ChildFinished myId now)
 
 --------------------------------------------------------------------------------
-restartChild :: QueueLike q => SupervisionCtx q -> UTCTime -> ThreadId -> IO Bool
-restartChild ctx now newDeath = do
+-- | Ignore any stale `DeadLetter`, which is a `DeadLetter` with an `Epoch`
+-- smaller than the one stored in the `Child_` to restart. Such stale `DeadLetter`
+-- are simply ignored.
+ignoringStaleLetters :: Epoch -> Epoch -> IO RestartResult -> IO RestartResult
+ignoringStaleLetters deadLetterEpoch childEpoch act = do
+  if deadLetterEpoch < childEpoch then return StaleDeadLetter else act
+
+--------------------------------------------------------------------------------
+restartChild :: QueueLike q
+             => SupervisionCtx q
+             -> Epoch
+             -> UTCTime
+             -> ThreadId
+             -> IO RestartResult
+restartChild ctx deadLetterEpoch now newDeath = do
   chMap <- readIORef (_sc_children ctx)
   case Map.lookup newDeath chMap of
-    Nothing -> return False
-    Just (Worker _ rState rPolicy act) ->
+    Nothing -> return ChildNotFound
+    Just (Worker workerEpoch rState rPolicy act) -> ignoringStaleLetters deadLetterEpoch workerEpoch $ do
       runRetryPolicy rState rPolicy emitEventChildRestartLimitReached $ \newRState -> do
         e <- getEpoch
         let ch = Worker e newRState rPolicy act
         newThreadId <- act newDeath
         writeIORef (_sc_children ctx) (Map.insert newThreadId ch $! Map.delete newDeath chMap)
         emitEventChildRestarted newThreadId newRState
-    Just (Supvsr _ rState rPolicy (Supervisor deathSup ctx')) -> do
-      runRetryPolicy rState rPolicy emitEventChildRestartLimitReached $ \newRState -> do
-        e <- getEpoch
-        restartedSup <- newSupervisor (_sc_strategy ctx) (_sc_eventStreamSize ctx')
-        let ch = (Supvsr e newRState rPolicy restartedSup)
-        -- TODO: shutdown children?
-        let newThreadId = _sp_myTid restartedSup
-        writeIORef (_sc_children ctx) (Map.insert newThreadId ch $! Map.delete deathSup chMap)
-        emitEventChildRestarted newThreadId newRState
+    Just (Supvsr supervisorEpoch rState rPolicy (Supervisor deathSup ctx')) -> do
+      ignoringStaleLetters deadLetterEpoch supervisorEpoch $ do
+        runRetryPolicy rState rPolicy emitEventChildRestartLimitReached $ \newRState -> do
+          e <- getEpoch
+          restartedSup <- newSupervisor (_sc_strategy ctx) (_sc_eventStreamSize ctx')
+          let ch = (Supvsr e newRState rPolicy restartedSup)
+          -- TODO: shutdown children?
+          let newThreadId = _sp_myTid restartedSup
+          writeIORef (_sc_children ctx) (Map.insert newThreadId ch $! Map.delete deathSup chMap)
+          emitEventChildRestarted newThreadId newRState
   where
     emitEventChildRestarted newThreadId newRState = atomically $
       writeQueue (_sc_eventStream ctx) (ChildRestarted newDeath newThreadId newRState now)
@@ -269,30 +297,31 @@ restartChild ctx now newDeath = do
                    -> RetryPolicyM IO
                    -> (RetryStatus -> IO ())
                    -> (RetryStatus -> IO ())
-                   -> IO Bool
+                   -> IO RestartResult
     runRetryPolicy rState rPolicy ifAbort ifThrottle = do
      maybeDelay <- getRetryPolicyM rPolicy rState
      case maybeDelay of
-       Nothing -> ifAbort rState >> return False
+       Nothing -> ifAbort rState >> return RestartLimitReached
        Just delay ->
          let newRState = rState { rsIterNumber = rsIterNumber rState + 1
                                 , rsCumulativeDelay = rsCumulativeDelay rState + delay
                                 , rsPreviousDelay = Just (maybe 0 (const delay) (rsPreviousDelay rState))
                                 }
-         in threadDelay delay >> ifThrottle newRState >> return True
+         in threadDelay delay >> ifThrottle newRState >> return Restarted
 
 --------------------------------------------------------------------------------
 restartOneForOne :: QueueLike q
                  => SupervisionCtx q
+                 -> Epoch
                  -> UTCTime
                  -> ThreadId
-                 -> IO Bool
+                 -> IO RestartResult
 restartOneForOne = restartChild
 
 --------------------------------------------------------------------------------
 handleEvents :: QueueLike q => SupervisionCtx q -> IO ()
 handleEvents ctx@SupervisionCtx{..} = do
-  (DeadLetter _ newDeath ex) <- atomically $ readTChan _sc_mailbox
+  (DeadLetter epoch newDeath ex) <- atomically $ readTChan _sc_mailbox
   now <- getCurrentTime
   atomically $ writeQueue _sc_eventStream (ChildDied newDeath ex now)
   -- If we catch an `AsyncException`, we have nothing but good
@@ -302,11 +331,10 @@ handleEvents ctx@SupervisionCtx{..} = do
   case typeOf ex == (typeOf (undefined :: AsyncException)) of
     True -> handleEvents ctx
     False -> do
-      successful <- case _sc_strategy of
-        OneForOne -> restartOneForOne ctx now newDeath
-      unless successful $ do
-        -- TODO: shutdown supervisor?
-        return ()
+      _ <- case _sc_strategy of
+        OneForOne -> restartOneForOne ctx epoch now newDeath
+      -- TODO: shutdown supervisor? Handle the `RestartResult` cases
+      -- appropriately.
       handleEvents ctx
 
 -- $monitor
