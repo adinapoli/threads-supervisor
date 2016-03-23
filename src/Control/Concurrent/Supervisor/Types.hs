@@ -43,10 +43,12 @@ import           Control.Concurrent
 import           Control.Concurrent.STM
 import           Control.Exception
 import           Control.Monad
+import           Control.Monad.IO.Class
 import           Control.Retry
 import qualified Data.HashMap.Strict as Map
 import           Data.IORef
 import           Data.Time
+import           Data.Time.Clock.POSIX
 import           Data.Typeable
 
 --------------------------------------------------------------------------------
@@ -87,11 +89,13 @@ instance QueueLike TBQueue where
     unless isFull $ writeTBQueue q e
 
 --------------------------------------------------------------------------------
-data DeadLetter = DeadLetter ThreadId SomeException
+data DeadLetter = DeadLetter !Epoch !ThreadId !SomeException
+
+type Epoch = POSIXTime
 
 --------------------------------------------------------------------------------
-data Child_ q = Worker !RetryStatus (RetryPolicyM IO) RestartAction
-              | Supvsr !RetryStatus (RetryPolicyM IO) !(Supervisor q)
+data Child_ q = Worker !Epoch !RetryStatus (RetryPolicyM IO) RestartAction
+              | Supvsr !Epoch !RetryStatus (RetryPolicyM IO) !(Supervisor q)
 
 --------------------------------------------------------------------------------
 type RestartAction = ThreadId -> IO ThreadId
@@ -118,11 +122,17 @@ fibonacciRetryPolicy :: RetryPolicyM IO
 fibonacciRetryPolicy = fibonacciBackoff 100
 
 --------------------------------------------------------------------------------
+getEpoch :: MonadIO m => m Epoch
+getEpoch = liftIO getPOSIXTime
+
+--------------------------------------------------------------------------------
 tryNotifyParent :: IORef (Maybe Mailbox) -> ThreadId -> SomeException -> IO ()
 tryNotifyParent mbPMbox myId ex = do
   readIORef mbPMbox >>= \m -> case m of
     Nothing -> return ()
-    Just m' -> atomically $ writeTChan m' (DeadLetter myId ex)
+    Just m' -> do
+      e <- getEpoch
+      atomically $ writeTChan m' (DeadLetter e myId ex)
 
 -- $new
 -- In order to create a new supervisor, you need a `SupervisorSpec`,
@@ -193,7 +203,7 @@ shutdownSupervisor (Supervisor tid ctx) = do
     processChildren (x:xs) = do
       case x of
         (workerTid, Worker{}) -> killThread workerTid
-        (_, Supvsr _ _ s) -> shutdownSupervisor s
+        (_, Supvsr _ _ _ s) -> shutdownSupervisor s
       processChildren xs
 
 -- $fork
@@ -210,7 +220,8 @@ forkSupervised :: QueueLike q
                -> IO ThreadId
 forkSupervised sup@Supervisor{..} policy act =
   bracket (supervised sup act) return $ \newChild -> do
-    let ch = Worker defaultRetryStatus policy (const (supervised sup act))
+    e <- getEpoch
+    let ch = Worker e defaultRetryStatus policy (const (supervised sup act))
     atomicModifyIORef' (_sc_children _sp_ctx) $ \chMap -> (Map.insert newChild ch chMap, ())
     now <- getCurrentTime
     atomically $ writeQueue (_sc_eventStream _sp_ctx) (ChildBorn newChild now)
@@ -219,8 +230,9 @@ forkSupervised sup@Supervisor{..} policy act =
 --------------------------------------------------------------------------------
 supervised :: QueueLike q => Supervisor q -> IO () -> IO ThreadId
 supervised Supervisor{..} act = forkFinally act $ \res -> case res of
-  Left ex -> bracket myThreadId return $ \myId -> atomically $ do
-    writeTChan (_sc_mailbox _sp_ctx) (DeadLetter myId ex)
+  Left ex -> bracket myThreadId return $ \myId -> do
+    e <- getEpoch
+    atomically $ writeTChan (_sc_mailbox _sp_ctx) (DeadLetter e myId ex)
   Right _ -> bracket myThreadId return $ \myId -> do
     now <- getCurrentTime
     atomicModifyIORef' (_sc_children _sp_ctx) $ \chMap -> (Map.delete myId chMap, ())
@@ -232,16 +244,18 @@ restartChild ctx now newDeath = do
   chMap <- readIORef (_sc_children ctx)
   case Map.lookup newDeath chMap of
     Nothing -> return False
-    Just (Worker rState rPolicy act) ->
+    Just (Worker _ rState rPolicy act) ->
       runRetryPolicy rState rPolicy emitEventChildRestartLimitReached $ \newRState -> do
-        let ch = Worker newRState rPolicy act
+        e <- getEpoch
+        let ch = Worker e newRState rPolicy act
         newThreadId <- act newDeath
         writeIORef (_sc_children ctx) (Map.insert newThreadId ch $! Map.delete newDeath chMap)
         emitEventChildRestarted newThreadId newRState
-    Just (Supvsr rState rPolicy (Supervisor deathSup ctx)) -> do
+    Just (Supvsr _ rState rPolicy (Supervisor deathSup ctx')) -> do
       runRetryPolicy rState rPolicy emitEventChildRestartLimitReached $ \newRState -> do
-        restartedSup <- newSupervisor (_sc_strategy ctx) (_sc_eventStreamSize ctx)
-        let ch = (Supvsr newRState rPolicy restartedSup)
+        e <- getEpoch
+        restartedSup <- newSupervisor (_sc_strategy ctx) (_sc_eventStreamSize ctx')
+        let ch = (Supvsr e newRState rPolicy restartedSup)
         -- TODO: shutdown children?
         let newThreadId = _sp_myTid restartedSup
         writeIORef (_sc_children ctx) (Map.insert newThreadId ch $! Map.delete deathSup chMap)
@@ -278,7 +292,7 @@ restartOneForOne = restartChild
 --------------------------------------------------------------------------------
 handleEvents :: QueueLike q => SupervisionCtx q -> IO ()
 handleEvents ctx@SupervisionCtx{..} = do
-  (DeadLetter newDeath ex) <- atomically $ readTChan _sc_mailbox
+  (DeadLetter _ newDeath ex) <- atomically $ readTChan _sc_mailbox
   now <- getCurrentTime
   atomically $ writeQueue _sc_eventStream (ChildDied newDeath ex now)
   -- If we catch an `AsyncException`, we have nothing but good
@@ -320,8 +334,9 @@ monitorWith policy sup1 sup2 = do
   readIORef sup2ParentMailbox >>= \mbox -> case mbox of
     Just _ -> return sup2Id -- Do nothing, this supervisor is already being monitored.
     Nothing -> do
+      e <- getEpoch
       let sup2RetryStatus = defaultRetryStatus
-      let ch' = Supvsr sup2RetryStatus policy sup2
+      let ch' = Supvsr e sup2RetryStatus policy sup2
       atomicModifyIORef' sup1Children $ \chMap -> (Map.insert sup2Id ch' chMap, ())
       duped <- atomically $ dupTChan sup1Mailbox
       atomicModifyIORef' sup2ParentMailbox $ const (Just duped, ())
