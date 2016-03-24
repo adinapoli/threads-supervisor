@@ -49,7 +49,7 @@ import           Control.Retry
 import qualified Data.HashMap.Strict as Map
 import           Data.IORef
 import           Data.Time
-import           Data.Time.Clock.POSIX
+import           System.Clock (Clock(Monotonic), TimeSpec, getTime)
 
 --------------------------------------------------------------------------------
 type Mailbox = TChan DeadLetter
@@ -92,7 +92,7 @@ instance QueueLike TBQueue where
 data DeadLetter = DeadLetter !LetterEpoch !ThreadId !SomeException
 
 --------------------------------------------------------------------------------
-type Epoch = POSIXTime
+type Epoch = TimeSpec
 newtype LetterEpoch = LetterEpoch Epoch deriving Show
 newtype ChildEpoch  = ChildEpoch  Epoch deriving Show
 
@@ -138,7 +138,7 @@ fibonacciRetryPolicy = fibonacciBackoff 100
 
 --------------------------------------------------------------------------------
 getEpoch :: MonadIO m => m Epoch
-getEpoch = liftIO getPOSIXTime
+getEpoch = liftIO $ getTime Monotonic
 
 --------------------------------------------------------------------------------
 tryNotifyParent :: IORef (Maybe Mailbox) -> ThreadId -> SomeException -> IO ()
