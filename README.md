@@ -7,7 +7,7 @@
 <p align="center">
     <a href="https://travis-ci.org/adinapoli/threads-supervisor">
         <img alt="Tests"
-             src="https://img.shields.io/travis/adinapoli/threads-supervisor.svg?style=flat-square">
+             src="https://img.shields.io/travis/adinapoli/threads-supervisor/master.svg?style=flat-square">
     </a>
     <a href='https://coveralls.io/github/adinapoli/threads-supervisor?branch=master'>
       <img src='https://coveralls.io/repos/github/adinapoli/threads-supervisor/badge.svg?branch=master' alt='Coverage Status' />
