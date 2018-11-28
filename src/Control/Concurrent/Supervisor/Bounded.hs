@@ -20,6 +20,7 @@ module Control.Concurrent.Supervisor.Bounded
 import           Control.Concurrent.STM
 import           Control.Concurrent.Supervisor.Types as T hiding (Supervisor, newSupervisor)
 import qualified Control.Concurrent.Supervisor.Types as Types
+import           Numeric.Natural
 
 type Supervisor = Types.Supervisor TBQueue
 
@@ -28,9 +29,9 @@ type Child = Types.Child_ TBQueue
 
 --------------------------------------------------------------------------------
 -- | The default size of the queue where `SupervisionEvent`(s) are written.
-defaultEventQueueSize :: Int
+defaultEventQueueSize :: Natural
 defaultEventQueueSize = 10000
 
 --------------------------------------------------------------------------------
-newSupervisor :: RestartStrategy -> Int -> IO Supervisor
+newSupervisor :: RestartStrategy -> Natural -> IO Supervisor
 newSupervisor = Types.newSupervisor
