@@ -12,3 +12,4 @@ examples/**.o
 threads-supervisor-example*
 .stack-work
 *.tix
+TAGS

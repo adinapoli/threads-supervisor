@@ -49,6 +49,7 @@ import           Control.Retry
 import qualified Data.HashMap.Strict as Map
 import           Data.IORef
 import           Data.Time
+import           Numeric.Natural
 import           System.Clock (Clock(Monotonic), TimeSpec, getTime)
 
 --------------------------------------------------------------------------------
@@ -61,7 +62,7 @@ data SupervisionCtx q = SupervisionCtx {
   -- ^ The mailbox of the parent process (which is monitoring this one), if any.
   , _sc_children         :: !(IORef (Map.HashMap ThreadId (Child_ q)))
   , _sc_eventStream      :: q SupervisionEvent
-  , _sc_eventStreamSize  :: !Int
+  , _sc_eventStreamSize  :: !Natural
   , _sc_strategy         :: !RestartStrategy
   }
 
@@ -72,7 +73,7 @@ data Supervisor q = Supervisor {
       }
 
 class QueueLike q where
-  newQueueIO :: Int -> IO (q a)
+  newQueueIO :: Natural -> IO (q a)
   readQueue  :: q a -> STM a
   writeQueue :: q a -> a -> STM ()
 
@@ -158,7 +159,7 @@ tryNotifyParent mbPMbox myId ex = do
 --------------------------------------------------------------------------------
 newSupervisor :: QueueLike q
               => RestartStrategy
-              -> Int
+              -> Natural
               -> IO (Supervisor q)
 newSupervisor strategy size = do
   parentMbx <- newIORef Nothing
