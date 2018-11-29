@@ -29,8 +29,8 @@ library
     clock                >= 0.6,
     unordered-containers >= 0.2.0.0 && < 0.5.0.0,
     retry                >= 0.7 && < 0.10,
-    transformers         >= 0.4 && < 0.5,
-    stm                  >= 2.4,
+    transformers         >= 0.4 && < 0.6,
+    stm                  >= 2.5,
     time                 >= 1.2
   hs-source-dirs: src
   if flag(prof)
