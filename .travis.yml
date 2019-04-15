@@ -99,7 +99,7 @@ script:
   - cabal new-build -w ${HC} ${TEST} ${BENCH} all
 
   # cabal check
-  # - (cd threads-supervisor-* && cabal check)
+  - (cd threads-supervisor-* && cabal check)
 
   # haddock
   - rm -rf ./dist-newstyle
