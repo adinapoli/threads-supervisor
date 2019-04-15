@@ -38,10 +38,11 @@ matrix:
     # env: TEST=--disable-tests BENCH=--disable-benchmarks
       addons: {apt: {packages: [ghc-ppa-tools,cabal-install-head,ghc-8.2.2], sources: [hvr-ghc]}}
     - compiler: "ghc-8.4.4"
-    # env: TEST=--disable-tests BENCH=--disable-benchmarks
+    # env: TEST=--disable-tests BENCH=--disable-benchmarks INSTALLED=false
       addons: {apt: {packages: [ghc-ppa-tools,cabal-install-head,ghc-8.4.4], sources: [hvr-ghc]}}
-  allow_failures:
-  - compiler: "ghc-8.4.4"
+    - compiler: "ghc-8.6.4"
+    # env: TEST=--disable-tests BENCH=--disable-benchmarks
+      addons: {apt: {packages: [ghc-ppa-tools,cabal-install-head,ghc-8.6.4], sources: [hvr-ghc]}}
 
   fast_finish: true
 
