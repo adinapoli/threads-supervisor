@@ -23,11 +23,15 @@ withQuickCheckDepth tn depth tests =
 --------------------------------------------------------------------------------
 allTests :: TestTree
 allTests = testGroup "All Tests" [
+    testGroup "Code coverage trivial tests" [
+        testCase "Show instances" testShowInstancesLaws
+    ],
     withQuickCheckDepth "Control.Concurrent.Supervisor" 20 [
         testProperty "1 supervised thread, no exceptions" (monadicIO test1SupThreadNoEx)
       , testProperty "1 supervised thread, premature async exception" (monadicIO test1SupThreadPrematureAsyncDemise)
       , testProperty "1 supervised thread, premature exception" (monadicIO test1SupThreadPrematureDemise)
       , testProperty "1 supervised supervisor, premature exception" (monadicIO test1SupSpvrPrematureDemise)
+      , testProperty "1 supervised supervisor, double supervision"  (monadicIO test1SupSpvrDouble)
       , testProperty "killing spree" (monadicIO testKillingSpree)
       , testProperty "cleanup" (monadicIO testSupCleanup)
       , testCase "too many restarts" testTooManyRestarts

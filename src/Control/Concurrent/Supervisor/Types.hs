@@ -17,9 +17,14 @@ module Control.Concurrent.Supervisor.Types
   , Child_
   , DeadLetter
   , RestartAction
+  , Epoch
+  , LetterEpoch(..)
+  , ChildEpoch(..)
   , SupervisionEvent(..)
   , RestartStrategy(..)
   , RestartResult(..)
+  -- * Useful functions
+  , getEpoch
   -- * Creating a new supervisor
   -- $new
   , newSupervisor
