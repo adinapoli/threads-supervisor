@@ -13,3 +13,5 @@ threads-supervisor-example*
 .stack-work
 *.tix
 TAGS
+dist-newstyle
+hie.yaml
